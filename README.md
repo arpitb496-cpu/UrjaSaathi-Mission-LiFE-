@@ -146,13 +146,27 @@ export interface AppState {
 
 ## 🧮 Mathematical Calculations & Audited Standards
 
-### 1. Grid Emission Methodology (CEA Version 22.0)
-- **National Synchronous Grid:** Under India's "One Nation, One Grid" architecture, regional grids operate synchronously.
-- **Busbar Baseline Factor:** The latest Central Electricity Authority (CEA) CO2 Baseline Database Version 22.0 reports a national weighted average baseline emission factor of approximately **~0.72 kg CO2/kWh** (net generation at power station busbar).
-- **Effective Consumer Terminal Factor:** When calculating consumer-level end-use electricity reduction, transmission & distribution (T&D / AT&C) losses of approximately ~15% and marginal thermal peak displacement are accounted for, resulting in an effective terminal displacement factor of **0.82 kg CO2/kWh**.
-- **Transparency Notice:** This derived end-use displacement figure is clearly documented in the applet as an engineering model factor and is not mislabeled as an officially published standalone regional tariff mandate.
+### 1. Grid Emission Methodology (CEA Version 22.0 FY 2025-26)
+- **Official National Baseline:** The primary household footprint baseline uses the **CEA Version 22.0 FY 2025-26 weighted average emission factor of 0.675 kg CO2/kWh** for the unified Indian Grid.
+  $$\text{Household Carbon (kg CO}_2\text{)} = \text{Monthly Consumption (kWh)} \times 0.675\text{ kg CO}_2\text{/kWh}$$
+- **Custom Delivery-Loss Adjusted Estimate (Engineering Model):** An optional delivery-loss-adjusted figure of **0.82 kg CO2/kWh** is provided for comparative lifecycle analysis, modeling an assumed ~17.7% Aggregate Technical & Commercial (AT&C) / transmission loss $[0.675 / (1 - 0.177) \approx 0.82]$.
+- **Methodology & Source Boundary:** The 0.82 kg CO2/kWh figure is explicitly documented as a custom engineering estimate and is **NOT** labeled as a CEA-published or CEA-verified figure.
 
-### 2. PM Surya Ghar: Muft Bijli Yojana Central Financial Assistance (CFA)
+### 2. Solar Generation with Explicit Performance Ratio (PR) & System Losses
+- **Solar Insolation:** Gujarat receives an average of $5.2\text{ Peak Sun Hours (PSH)/day}$.
+- **Configurable System Losses:** Modeled at a default of $17.5\%$ (covering $4\%$ soiling/dust, $8.5\%$ thermal derating, $2\%$ cabling/mismatch, and $3\%$ inverter conversion efficiency).
+- **Explicit Performance Ratio (PR):**
+  $$\text{PR} = 1 - \frac{\text{System Losses (\%)}}{100} = 1 - 0.175 = 0.825$$
+- **Specific Yield & Monthly Generation:**
+  $$\text{Daily Specific Yield} = 5.2\text{ PSH/day} \times 0.825\text{ PR} = 4.29\text{ kWh/kW/day}$$
+  $$\text{Monthly Generation (kWh)} = \text{Capacity (kW)} \times 4.29 \times 30.42 \approx \text{Capacity (kW)} \times 130\text{ kWh/month}$$
+
+### 3. GERC GIDRES Regulations, 2026 & Surplus Compensation
+- **Regulatory Framework:** Gujarat Electricity Regulatory Commission (GERC) notified the *Grid Interactive Distributed Renewable Energy Sources (GIDRES) Regulations, 2026* on **30 October 2026**.
+- **Surplus Injection Compensation Rate:** Residential solar rooftop consumers injecting surplus energy into the DISCOM grid receive a regulatory compensation of **₹2.25/kWh**.
+- **Crucial Regulatory Distinction from APPC:** The ₹2.25/kWh feed-in rate is an explicit regulatory tariff determined under the GERC GIDRES Regulations, 2026 for distributed consumer generators. It is **expressly distinguished from the DISCOM utility-wide Average Power Purchase Cost (APPC)**, which is the bulk pool purchase price of the distribution licensee.
+
+### 4. PM Surya Ghar: Muft Bijli Yojana Central Financial Assistance (CFA)
 - **1 kW System:** ₹30,000 CFA
 - **2 kW System:** ₹60,000 CFA (₹30,000/kW for first 2 kW)
 - **3 kW & Above:** Flat ₹78,000 CFA (Maximum cap for single residential rooftop connections)
@@ -163,13 +177,8 @@ export interface AppState {
   4. ALMM-listed DCR (Domestic Content Requirement) certified solar PV modules and inverters.
   5. Subsidy credited directly via Direct Benefit Transfer (DBT) to the consumer's bank account following technical feasibility approval and net-meter commissioning.
 
-### 3. Solar Feasibility & Payback Economics in Gujarat
-- **Solar Insolation:** ~4.33 Peak Sun Hours (PSH)/day (generating ~130 units/kW/month, ~1560 units/kW/year).
-- **Average DISCOM Tariff:** Assumed baseline average of ₹6.25/kWh (configurable).
-- **Surplus Grid Feed-in:** Excess power exported to DISCOM is credited at the GERC APPC benchmark rate of ~₹2.25/unit.
-- **Benchmark Capital Cost:** ~₹58,000/kW gross benchmark before subsidy.
-- **Payback Period Formula:**
-  $$\text{Payback (Years)} = \frac{\text{Gross Capital Cost} - \text{PM Surya Ghar Subsidy}}{\text{Annual Electricity Savings}}$$
+### 5. Payback Economics Formula
+$$\text{Payback (Years)} = \frac{\text{Gross Capital Cost} - \text{PM Surya Ghar Subsidy}}{\text{Annual Electricity Bill Savings}}$$
 
 ---
 
@@ -226,8 +235,8 @@ All 5 core test suites pass verifying per-capita calculations, edge case usage, 
 
 ## 📚 Authoritative References
 
-1. **Central Electricity Authority (CEA), Ministry of Power, Govt. of India:** *CO2 Baseline Database for the Indian Power Sector, Version 22.0.*
+1. **Central Electricity Authority (CEA), Ministry of Power, Govt. of India:** *CO2 Baseline Database for the Indian Power Sector, Version 22.0 (FY 2025-26 Weighted Average: 0.675 kg CO2/kWh).*
 2. **Ministry of New and Renewable Energy (MNRE), Govt. of India:** *PM Surya Ghar: Muft Bijli Yojana Operational Guidelines (2024).* [pmsuryaghar.gov.in](https://pmsuryaghar.gov.in)
 3. **Gujarat Energy Development Agency (GEDA):** *Surya Gujarat Residential Rooftop Solar Guidelines.*
-4. **Gujarat Electricity Regulatory Commission (GERC):** *Net Metering Regulations for Grid-Connected Solar PV Systems.*
+4. **Gujarat Electricity Regulatory Commission (GERC):** *Grid Interactive Distributed Renewable Energy Sources Regulations, 2026 (Notified on 30 October 2026) — Residential surplus injection compensation at ₹2.25/kWh (expressly distinguished from DISCOM APPC).*
 5. **NITI Aayog & MoEFCC, Govt. of India:** *Mission LiFE (Lifestyle for Environment) Global Movement Documents.*

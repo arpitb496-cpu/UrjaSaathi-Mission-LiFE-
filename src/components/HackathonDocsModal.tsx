@@ -278,38 +278,51 @@ interface AppState {
 
               <div className="p-3.5 bg-gray-50 rounded-xl border border-gray-200 space-y-2">
                 <h4 className="font-bold text-emerald-900 text-xs">
-                  1. CEA CO2 Baseline Database Ver 22.0 & End-Use Displacement
+                  1. CEA Version 22.0 FY 2025-26 Baseline & Custom Loss Modeling
                 </h4>
                 <p className="text-xs font-mono bg-white p-2 rounded border border-gray-200">
-                  National Grid Weighted Average Factor: ~0.72 kg CO2/kWh (Net Busbar, CEA Ver 22.0)
-                  Effective Consumer Terminal Factor: 0.82 kg CO2/kWh (Inclusive of ~15% T&D grid losses)
+                  Default Household Baseline: 0.675 kg CO2/kWh (CEA Ver 22.0 FY 2025-26 Weighted Average)
+                  Custom Delivery-Loss Estimate: 0.82 kg CO2/kWh (Derived with ~17.7% AT&C losses)
                 </p>
                 <p className="text-[11px] text-gray-600">
-                  India operates on a unified synchronous National Grid ("One Nation, One Grid"). Under CEA Version 22.0 methodology, the national weighted average factor is ~0.72 kg CO2/kWh at power station busbar. For end-use residential power reduction, the effective terminal displacement is calculated at 0.82 kg CO2/kWh to account for avoided transmission and technical losses. This derived figure is not an officially mandated regional tariff table.
+                  The application uses the official CEA Version 22.0 FY 2025-26 weighted average emission factor of <strong>0.675 kg CO2/kWh</strong> as the primary default household footprint baseline. The 0.82 kg CO2/kWh figure represents a custom delivery-loss-adjusted engineering estimate incorporating ~17.7% AT&C transmission losses and is explicitly NOT labeled as a CEA-published figure.
                 </p>
               </div>
 
               <div className="p-3.5 bg-gray-50 rounded-xl border border-gray-200 space-y-2">
                 <h4 className="font-bold text-emerald-900 text-xs">
-                  2. Solar Rooftop Generation in Gujarat
+                  2. Solar Rooftop Generation with Explicit Performance Ratio (PR)
                 </h4>
                 <p className="text-xs font-mono bg-white p-2 rounded border border-gray-200">
-                  Monthly Generation (kWh) = Capacity (kW) × 130 kWh/month (~4.33 PSH/day)
+                  Daily Yield (kWh/kW) = 5.2 PSH/day × PR [PR = 1 - (Losses% / 100)] = 5.2 × 0.825 = 4.29 kWh/kW/day
+                  Monthly Generation ≈ Capacity (kW) × 130 kWh/month (~1560 kWh/kW/year)
                 </p>
                 <p className="text-[11px] text-gray-600">
-                  Derived from Gujarat Energy Development Agency (GEDA) solar insolation benchmarks.
+                  Includes an explicit, user-configurable system loss model (default: 17.5% covering dust/soiling 4%, temperature derating 8.5%, cabling 2%, and inverter 3%, yielding PR = 0.825).
                 </p>
               </div>
 
               <div className="p-3.5 bg-gray-50 rounded-xl border border-gray-200 space-y-2">
                 <h4 className="font-bold text-emerald-900 text-xs">
-                  3. PM Surya Ghar Muft Bijli Yojana Central Subsidy
+                  3. PM Surya Ghar Muft Bijli Yojana Central Financial Assistance (CFA)
                 </h4>
                 <ul className="list-disc pl-5 text-xs space-y-1">
                   <li><strong>1 kW PV:</strong> ₹30,000 Central Financial Assistance</li>
-                  <li><strong>2 kW PV:</strong> ₹60,000 Central Financial Assistance</li>
-                  <li><strong>3 kW & Above:</strong> Flat ₹78,000 Central Financial Assistance</li>
+                  <li><strong>2 kW PV:</strong> ₹60,000 Central Financial Assistance (₹30,000/kW)</li>
+                  <li><strong>3 kW & Above:</strong> Flat ₹78,000 Central Financial Assistance (Maximum single-residence cap)</li>
                 </ul>
+              </div>
+
+              <div className="p-3.5 bg-gray-50 rounded-xl border border-gray-200 space-y-2">
+                <h4 className="font-bold text-emerald-900 text-xs">
+                  4. GERC GIDRES Regulations, 2026 (Notified 30 October 2026)
+                </h4>
+                <p className="text-xs font-mono bg-white p-2 rounded border border-gray-200">
+                  Surplus Net-Metering Injection Compensation: ₹2.25/kWh (Fixed Regulatory Feed-in Tariff)
+                </p>
+                <p className="text-[11px] text-gray-600">
+                  Under the GERC (Grid Interactive Distributed Renewable Energy Sources) Regulations, 2026, notified on 30 October 2026, surplus energy injected into the grid is compensated by Gujarat DISCOMs at ₹2.25/kWh. This regulatory feed-in compensation is expressly distinguished from the utility-wide bulk Average Power Purchase Cost (APPC).
+                </p>
               </div>
             </div>
           )}

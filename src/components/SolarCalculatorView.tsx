@@ -46,6 +46,7 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
   const [monthlyBill, setMonthlyBill] = useState<number>(initialProfile.monthlyBillInr || 2100);
   const [tariffRate, setTariffRate] = useState<number>(6.25);
   const [hasBattery, setHasBattery] = useState<boolean>(false);
+  const [systemLosses, setSystemLosses] = useState<number>(17.5);
   const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
 
   // Calculate live results using our domain math
@@ -56,6 +57,7 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
     monthlyBillInr: monthlyBill,
     unitRateInr: tariffRate,
     hasBatteryBackup: hasBattery,
+    systemLossesPercent: systemLosses,
   });
 
   // Comparison chart data: Current vs With Rooftop Solar
@@ -232,6 +234,46 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
               </label>
             </div>
           </div>
+
+          {/* Configurable System Losses & Performance Ratio (PR) */}
+          <div className="pt-2 border-t border-gray-100">
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-xs font-bold text-gray-700">
+                System Losses & Performance Ratio (PR)
+              </label>
+              <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded">
+                Losses: {systemLosses}% • PR: {result.assumptions.performanceRatio}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="10"
+              max="30"
+              step="0.5"
+              value={systemLosses}
+              onChange={(e) => setSystemLosses(parseFloat(e.target.value) || 17.5)}
+              className="w-full accent-emerald-600"
+            />
+            <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
+              <span>10% (High Efficiency)</span>
+              <span>17.5% (Standard Default)</span>
+              <span>30% (High Dust/Soiling)</span>
+            </div>
+            <p className="text-[10px] text-gray-500 mt-1">
+              PR incorporates dust/soiling (4%), temperature derating (8.5%), cabling (2%), and inverter losses (3%).
+            </p>
+          </div>
+
+          {/* Regulatory Regime Callout */}
+          <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-[11px] text-emerald-950 space-y-1">
+            <div className="flex items-center gap-1 font-bold text-emerald-900">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
+              <span>GERC GIDRES Regulations, 2026 (Notified 30 Oct 2026)</span>
+            </div>
+            <p className="leading-snug text-emerald-800">
+              Surplus solar injection into the Gujarat grid is compensated at <strong>₹2.25/kWh</strong> under the newly notified 2026 regulations (expressly distinguished from the DISCOM bulk APPC rate).
+            </p>
+          </div>
         </div>
 
         {/* OUTPUTS COLUMN (7 Cols) */}
@@ -380,7 +422,7 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
                 <strong>DISCOM Tariff:</strong> ₹{result.assumptions.discomTariffRateInr}/kWh
               </div>
               <div>
-                <strong>Surplus Export Rate:</strong> ₹{result.assumptions.surplusExportBuybackRateInr}/unit
+                <strong>Surplus Export Rate:</strong> ₹{result.assumptions.surplusInjectionCompensationInr}/kWh
               </div>
               <div>
                 <strong>Benchmark Cost:</strong> ₹{result.assumptions.baseSystemCostPerKwInr.toLocaleString('en-IN')}/kW
@@ -476,6 +518,12 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
                 </p>
                 <p>
                   <strong>Payback Period:</strong> {result.paybackPeriodYears} Years
+                </p>
+                <p>
+                  <strong>Performance Ratio:</strong> {result.assumptions.performanceRatio} (System Losses: {result.assumptions.systemLossesPercent}%)
+                </p>
+                <p>
+                  <strong>Surplus Feed-in Tariff:</strong> ₹{result.assumptions.surplusInjectionCompensationInr}/kWh (GERC GIDRES Regulations 2026, distinct from APPC)
                 </p>
               </div>
 

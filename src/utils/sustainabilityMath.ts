@@ -2,16 +2,20 @@
  * Sustainability & Solar Calculation Engine
  * Designed for Gujarat Energy Development Agency (GEDA) Mission LiFE Hackathon
  *
- * Methodological References:
+ * Methodological & Regulatory References:
  * 1. Central Electricity Authority (CEA), Ministry of Power, Govt. of India:
  *    - CO2 Baseline Database for the Indian Power Sector, Version 22.0 (Unified National Grid).
- *    - National Weighted Average Baseline Emission Factor: ~0.72 kg CO2/kWh (net busbar).
- *    - Effective End-Use Consumer Displacement Factor: ~0.82 kg CO2/kWh (incorporating
- *      marginal thermal replacement and ~15% Transmission & Distribution / AT&C grid losses).
- * 2. Ministry of New and Renewable Energy (MNRE), Govt. of India:
- *    - PM Surya Ghar: Muft Bijli Yojana (Cabinet approved Feb 2024, National Portal: pmsuryaghar.gov.in).
- * 3. Gujarat Electricity Regulatory Commission (GERC) & GEDA:
- *    - Residential Net Metering regulations and DISCOM tariffs (UGVCL, PGVCL, DGVCL, MGVCL, Torrent Power).
+ *    - Official FY 2025-26 Weighted Average Emission Factor: 0.675 kg CO2/kWh (Primary Default Household Footprint Baseline).
+ *    - Custom delivery-loss-adjusted estimate (0.82 kg CO2/kWh) is an engineering-derived model
+ *      incorporating an assumed ~17.7% AT&C / delivery loss. (NOT an officially published CEA baseline figure).
+ * 2. Gujarat Electricity Regulatory Commission (GERC):
+ *    - GERC (Grid Interactive Distributed Renewable Energy Sources) Regulations, 2026, notified on 30 October 2026.
+ *    - Surplus injection compensation: ₹2.25/kWh residential solar feed-in rate determined under GIDRES Regulations 2026.
+ *      (Expressly distinguished from the DISCOM utility-wide Average Power Purchase Cost / APPC).
+ * 3. Ministry of New and Renewable Energy (MNRE), Govt. of India:
+ *    - PM Surya Ghar: Muft Bijli Yojana (Operational Guidelines & National Portal: pmsuryaghar.gov.in).
+ * 4. Gujarat Energy Development Agency (GEDA):
+ *    - Surya Gujarat Rooftop Solar Implementation Guidelines.
  */
 
 export interface HouseholdProfile {
@@ -43,8 +47,8 @@ export interface SustainabilityMetrics {
   potentialMonthlySavingInr: number;
   potentialCo2ReductionKg: number;
   methodologyNotes: {
-    ceaBaseEmissionFactorKgPerKwh: number;
-    effectiveConsumerFactorKgPerKwh: number;
+    ceaOfficialEmissionFactorKgPerKwh: number;
+    customDeliveryLossAdjustedFactorKgPerKwh: number;
     emissionBasis: string;
   };
 }
@@ -56,6 +60,8 @@ export interface SolarCalculationInput {
   monthlyBillInr: number;
   unitRateInr?: number; // default ~6.25
   hasBatteryBackup?: boolean;
+  systemLossesPercent?: number; // e.g. 17.5% default (cabling, dust/soiling, thermal, inverter)
+  performanceRatio?: number; // e.g. 0.825 default (PR = 1 - systemLosses/100)
 }
 
 export interface SolarCalculationResult {
@@ -75,11 +81,15 @@ export interface SolarCalculationResult {
   solarCoveragePercent: number;
   assumptions: {
     solarIrradiancePshPerDay: number;
+    systemLossesPercent: number;
+    performanceRatio: number;
+    generationPerKwDailyKwh: number;
     generationPerKwMonthlyKwh: number;
     baseSystemCostPerKwInr: number;
     discomTariffRateInr: number;
-    surplusExportBuybackRateInr: number;
+    surplusInjectionCompensationInr: number;
     annualDegradationPct: number;
+    regulatoryRegime: string;
   };
   eligibilityConditions: string[];
   sourceReferences: string[];
@@ -137,13 +147,19 @@ export const APPLIANCE_CATALOG = [
 ];
 
 /**
- * Grid Emission Factors:
- * CEA Version 22.0 National Weighted Average Grid Emission Factor is ~0.72 kg CO2/kWh at busbar.
- * When accounting for transmission and distribution (T&D / AT&C) losses (~15%) and marginal thermal
- * displacement at consumer terminals, end-use carbon displacement is calculated at 0.82 kg CO2/kWh.
+ * CEA Baseline Emission Factors:
+ * CEA Version 22.0 official FY 2025-26 weighted average emission factor is 0.675 kg CO2/kWh for the National Grid.
+ * This is the mandatory default baseline for household footprint calculations.
  */
-export const CEA_BASE_GRID_EMISSION_FACTOR_KG_CO2_PER_KWH = 0.72;
-export const EFFECTIVE_CONSUMER_EMISSION_FACTOR_KG_CO2_PER_KWH = 0.82;
+export const CEA_VER_22_FY25_26_EMISSION_FACTOR_KG_CO2_PER_KWH = 0.675;
+
+/**
+ * Custom Delivery-Loss-Adjusted Estimate:
+ * An engineering-derived estimate incorporating ~17.7% Aggregate Technical & Commercial (AT&C) / T&D delivery losses:
+ * 0.675 / (1 - 0.177) ≈ 0.82 kg CO2/kWh.
+ * Explicitly documented as a custom modeling estimate and NOT an officially published CEA baseline figure.
+ */
+export const CUSTOM_DELIVERY_LOSS_ADJUSTED_FACTOR_KG_CO2_PER_KWH = 0.82;
 
 // Standard tree sequestration factor: 20 kg CO2 per mature tree annually
 export const CO2_PER_TREE_ANNUAL_KG = 20;
@@ -156,8 +172,8 @@ export function calculateSustainabilityMetrics(profile: HouseholdProfile): Susta
   const monthlyKwh = Math.max(10, profile.monthlyKwh || 100);
   const perCapitaKwh = Number((monthlyKwh / members).toFixed(1));
 
-  // Carbon metrics using the effective consumer terminal displacement factor (0.82 kg CO2/kWh)
-  const monthlyCarbonKg = Number((monthlyKwh * EFFECTIVE_CONSUMER_EMISSION_FACTOR_KG_CO2_PER_KWH).toFixed(1));
+  // Carbon metrics using the CEA Version 22.0 FY 2025-26 weighted average baseline (0.675 kg CO2/kWh)
+  const monthlyCarbonKg = Number((monthlyKwh * CEA_VER_22_FY25_26_EMISSION_FACTOR_KG_CO2_PER_KWH).toFixed(1));
   const annualCarbonTonnes = Number(((monthlyCarbonKg * 12) / 1000).toFixed(2));
   const treeOffsetEquivalent = Math.round(monthlyCarbonKg / (CO2_PER_TREE_ANNUAL_KG / 12));
 
@@ -229,7 +245,7 @@ export function calculateSustainabilityMetrics(profile: HouseholdProfile): Susta
   const potentialMonthlySavingKwh = Math.round(monthlyKwh * 0.18);
   const avgTariff = profile.monthlyBillInr > 0 ? profile.monthlyBillInr / monthlyKwh : 6.25;
   const potentialMonthlySavingInr = Math.round(potentialMonthlySavingKwh * avgTariff);
-  const potentialCo2ReductionKg = Number((potentialMonthlySavingKwh * EFFECTIVE_CONSUMER_EMISSION_FACTOR_KG_CO2_PER_KWH).toFixed(1));
+  const potentialCo2ReductionKg = Number((potentialMonthlySavingKwh * CEA_VER_22_FY25_26_EMISSION_FACTOR_KG_CO2_PER_KWH).toFixed(1));
 
   return {
     perCapitaKwh,
@@ -243,16 +259,17 @@ export function calculateSustainabilityMetrics(profile: HouseholdProfile): Susta
     potentialMonthlySavingInr,
     potentialCo2ReductionKg,
     methodologyNotes: {
-      ceaBaseEmissionFactorKgPerKwh: CEA_BASE_GRID_EMISSION_FACTOR_KG_CO2_PER_KWH,
-      effectiveConsumerFactorKgPerKwh: EFFECTIVE_CONSUMER_EMISSION_FACTOR_KG_CO2_PER_KWH,
-      emissionBasis: 'Derived consumer terminal displacement factor (0.82 kg CO2/kWh) based on CEA Unified National Grid Ver 22.0 (~0.72 kg/kWh busbar) + ~15% technical T&D losses.',
+      ceaOfficialEmissionFactorKgPerKwh: CEA_VER_22_FY25_26_EMISSION_FACTOR_KG_CO2_PER_KWH,
+      customDeliveryLossAdjustedFactorKgPerKwh: CUSTOM_DELIVERY_LOSS_ADJUSTED_FACTOR_KG_CO2_PER_KWH,
+      emissionBasis: 'Official CEA Version 22.0 FY 2025-26 weighted average emission factor of 0.675 kg CO2/kWh is used as the default household footprint baseline. The optional 0.82 kg CO2/kWh figure represents a custom engineering estimate accounting for ~17.7% delivery/AT&C grid losses and is not a CEA-published figure.',
     },
   };
 }
 
 /**
  * Solar Rooftop Feasibility Calculator
- * Fully compliant with PM Surya Ghar: Muft Bijli Yojana & Gujarat DISCOM guidelines
+ * Fully compliant with PM Surya Ghar: Muft Bijli Yojana &
+ * GERC (Grid Interactive Distributed Renewable Energy Sources) Regulations, 2026 (notified 30 October 2026).
  */
 export function calculateSolarFeasibility(input: SolarCalculationInput): SolarCalculationResult {
   const monthlyKwh = Math.max(30, input.monthlyKwh || 200);
@@ -262,9 +279,22 @@ export function calculateSolarFeasibility(input: SolarCalculationInput): SolarCa
   // 1 kW requires ~100 sq ft shadow-free area
   const maxFeasibleCapacityKw = Number((rooftopAreaSqFt / 100).toFixed(1));
 
-  // Gujarat Solar Resource: ~4.33 Peak Sun Hours (PSH) per day
-  // 1 kW produces ~130 units (kWh) per month (~1560 units annually)
-  const unitsPerKwMonthly = 130;
+  // Explicit Performance Ratio (PR) & Configurable System Losses
+  // Default system losses: 17.5% (cabling 2%, soiling/dust 4%, temperature derating 8.5%, inverter 3%)
+  const systemLossesPercent = input.systemLossesPercent !== undefined ? Math.max(5, Math.min(40, input.systemLossesPercent)) : 17.5;
+  const performanceRatio = input.performanceRatio !== undefined
+    ? Math.max(0.6, Math.min(0.95, input.performanceRatio))
+    : Number((1 - systemLossesPercent / 100).toFixed(3)); // 0.825
+
+  // Gujarat Solar Resource: ~5.10 to 5.25 Peak Sun Hours (PSH) per day
+  const solarIrradiancePshPerDay = 5.2;
+
+  // Generation formula:
+  // Daily Generation (kWh/kW) = PSH × Performance Ratio
+  // e.g. 5.2 PSH/day × 0.825 PR = 4.29 kWh/kW/day
+  const generationPerKwDailyKwh = Number((solarIrradiancePshPerDay * performanceRatio).toFixed(2));
+  // Monthly Generation per kW: ~4.29 × 30.42 days ≈ 130.5 kWh/kW/month (standardized to ~130 kWh)
+  const unitsPerKwMonthly = Math.round(generationPerKwDailyKwh * 30.42);
 
   // Capacity needed to offset ~90% of household monthly consumption
   const idealCapacityNeededKw = Math.ceil((monthlyKwh * 0.9) / unitsPerKwMonthly);
@@ -292,7 +322,7 @@ export function calculateSolarFeasibility(input: SolarCalculationInput): SolarCa
    * PM Surya Ghar: Muft Bijli Yojana Central Financial Assistance (CFA) Rules:
    * - 1 kW: ₹30,000
    * - 2 kW: ₹60,000 (₹30,000/kW for first 2 kW)
-   * - 3 kW & above: ₹78,000 (₹60,000 + ₹18,000 for 3rd kW, flat maximum cap)
+   * - 3 kW & above: ₹78,000 (₹60,000 + ₹18,000 for 3rd kW, flat maximum residential cap)
    */
   let applicableSubsidyInr = 0;
   if (suggestedCapacityKw === 1) {
@@ -305,14 +335,19 @@ export function calculateSolarFeasibility(input: SolarCalculationInput): SolarCa
 
   const netSystemCostInr = Math.max(0, grossSystemCostInr - applicableSubsidyInr);
 
-  // Financial savings:
-  // Offset self-consumption at residential tariff; surplus exported at DISCOM APPC rate (~₹2.25/unit in Gujarat)
+  /**
+   * GERC (Grid Interactive Distributed Renewable Energy Sources) Regulations, 2026:
+   * Notified on 30 October 2026.
+   * Residential net metering surplus injection compensation is explicitly set at ₹2.25/kWh.
+   * NOTE: This regulatory feed-in rate is expressly distinguished from DISCOM Average Power Purchase Cost (APPC).
+   */
+  const surplusInjectionCompensationInr = 2.25;
+
   const usableSavedUnitsMonthly = Math.min(monthlyKwh, monthlyGenerationKwh);
   const surplusUnitsMonthly = Math.max(0, monthlyGenerationKwh - monthlyKwh);
-  const surplusRateInr = 2.25;
 
   const monthlySavingsInr = Math.round(
-    usableSavedUnitsMonthly * unitRateInr + surplusUnitsMonthly * surplusRateInr
+    usableSavedUnitsMonthly * unitRateInr + surplusUnitsMonthly * surplusInjectionCompensationInr
   );
   const annualSavingsInr = Math.round(monthlySavingsInr * 12);
 
@@ -320,10 +355,11 @@ export function calculateSolarFeasibility(input: SolarCalculationInput): SolarCa
   const paybackPeriodYears = annualSavingsInr > 0 ? Number((netSystemCostInr / annualSavingsInr).toFixed(1)) : 0;
 
   // 25-Year projections with 0.7% annual module degradation factor
-  const degradationFactor25Yr = 22.5; // cumulative multiplier
+  const degradationFactor25Yr = 22.5;
   const twentyFiveYearSavingsInr = Math.round(annualSavingsInr * degradationFactor25Yr);
+  // Uses CEA Version 22.0 official 0.675 kg CO2/kWh factor for environmental accounting
   const twentyFiveYearCo2ReductionTonnes = Number(
-    ((annualGenerationKwh * degradationFactor25Yr * EFFECTIVE_CONSUMER_EMISSION_FACTOR_KG_CO2_PER_KWH) / 1000).toFixed(1)
+    ((annualGenerationKwh * degradationFactor25Yr * CEA_VER_22_FY25_26_EMISSION_FACTOR_KG_CO2_PER_KWH) / 1000).toFixed(1)
   );
   const treeEquivalentLifetime = Math.round((twentyFiveYearCo2ReductionTonnes * 1000) / (CO2_PER_TREE_ANNUAL_KG * 25));
 
@@ -338,11 +374,11 @@ export function calculateSolarFeasibility(input: SolarCalculationInput): SolarCa
   ];
 
   const sourceReferences = [
+    'GERC (Grid Interactive Distributed Renewable Energy Sources) Regulations, 2026, notified on 30 October 2026.',
     'Ministry of New and Renewable Energy (MNRE): PM Surya Ghar: Muft Bijli Yojana Operational Guidelines (2024).',
     'National Portal for Rooftop Solar: https://pmsuryaghar.gov.in',
     'Gujarat Energy Development Agency (GEDA): Surya Gujarat Residential Rooftop Solar Guidelines.',
-    'Gujarat Electricity Regulatory Commission (GERC): Net Metering Regulations for Grid-Connected Solar PV Systems.',
-    'Central Electricity Authority (CEA): CO2 Baseline Database for the Indian Power Sector, Version 22.0.',
+    'Central Electricity Authority (CEA): CO2 Baseline Database for the Indian Power Sector, Version 22.0 (FY 2025-26 Weighted Average: 0.675 kg CO2/kWh).',
   ];
 
   return {
@@ -361,16 +397,20 @@ export function calculateSolarFeasibility(input: SolarCalculationInput): SolarCa
     treeEquivalentLifetime,
     solarCoveragePercent,
     assumptions: {
-      solarIrradiancePshPerDay: 4.33,
+      solarIrradiancePshPerDay,
+      systemLossesPercent,
+      performanceRatio,
+      generationPerKwDailyKwh,
       generationPerKwMonthlyKwh: unitsPerKwMonthly,
       baseSystemCostPerKwInr: baseCostPerKw,
       discomTariffRateInr: unitRateInr,
-      surplusExportBuybackRateInr: surplusRateInr,
+      surplusInjectionCompensationInr,
       annualDegradationPct: 0.7,
+      regulatoryRegime: 'GERC GIDRES Regulations, 2026 (Notified 30 Oct 2026) — ₹2.25/kWh surplus injection rate (distinct from APPC)',
     },
     eligibilityConditions,
     sourceReferences,
     disclaimer:
-      'Disclaimer: All estimations are model-driven feasibility simulations based on typical Gujarat solar irradiance (~4.33 PSH/day) and standard PM Surya Ghar DBT subsidy benchmarks. Actual generation varies based on roof orientation, tilt angle, local shading, seasonal dust, ambient temperature, and DISCOM meter approval. These figures do not represent guaranteed commercial or financial returns.',
+      'Disclaimer: All estimations are model-driven feasibility simulations based on Gujarat solar irradiance (~5.2 PSH/day, PR = 0.825), GERC Grid Interactive Distributed Renewable Energy Sources Regulations 2026 (₹2.25/kWh surplus injection compensation, distinct from APPC), and standard PM Surya Ghar DBT subsidy benchmarks. Actual generation varies based on roof orientation, tilt angle, local shading, seasonal dust, ambient temperature, and DISCOM meter approval. These figures do not represent guaranteed commercial or financial returns.',
   };
 }
