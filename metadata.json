@@ -1,0 +1,6 @@
+{
+  "name": "URJASAATHI – Your Personal Green Energy Companion",
+  "description": "Gujarat Energy Development Agency (GEDA) Mission LiFE Green Energy & Sustainability Companion for households across Gujarat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
