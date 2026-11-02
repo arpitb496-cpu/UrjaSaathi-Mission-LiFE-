@@ -107,16 +107,16 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
   return (
     <div className="space-y-6 pb-12">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-emerald-950 via-emerald-900 to-teal-950 rounded-2xl p-6 sm:p-8 text-white shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="space-y-2 max-w-xl">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-800/80 border border-emerald-500/40 text-xs font-semibold text-lime-300">
-            <Award className="w-4 h-4" />
-            <span>Prototype Digital Credential • Hackathon Demonstration Model</span>
+          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800">
+            <span className="w-2 h-2 rounded-full bg-[#059669]" />
+            <span>Prototype Digital Credential · Hackathon Demonstration Model</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-bold font-heading">
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight font-heading">
             Green Impact Passport
           </h1>
-          <p className="text-sm text-emerald-100/90 leading-relaxed">
+          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
             A prototype digital sustainability credential demonstrating how verified household micro-actions,
             carbon offsets, and solar adoption can be celebrated under GEDA Mission LiFE.
           </p>
@@ -125,16 +125,16 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
         <div className="flex items-center gap-2.5 self-start md:self-auto shrink-0">
           <button
             onClick={() => window.print()}
-            className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-white flex items-center gap-2 transition-colors"
+            className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200/80 border border-slate-200 text-xs font-bold text-slate-700 flex items-center gap-2 transition-colors shadow-xs"
           >
-            <Download className="w-4 h-4 text-lime-300" />
+            <Download className="w-4 h-4 text-[#059669]" />
             <span>Print / Save PDF</span>
           </button>
           <button
             onClick={handleShare}
-            className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white flex items-center gap-2 transition-colors shadow-sm"
+            className="px-4 py-2.5 rounded-xl bg-[#14532D] hover:bg-emerald-900 text-xs font-bold text-white flex items-center gap-2 transition-all shadow-xs"
           >
-            <Share2 className="w-4 h-4 text-lime-300" />
+            <Share2 className="w-4 h-4 text-[#A3E635]" />
             <span>{copied ? 'Copied Link!' : 'Share Passport'}</span>
           </button>
         </div>

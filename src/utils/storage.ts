@@ -21,9 +21,9 @@ export interface AppState {
 const STORAGE_KEY = 'urjasaathi_state_v1';
 
 export const DEFAULT_PROFILE: HouseholdProfile = {
-  name: 'Devanshi Shah',
-  city: 'Gandhinagar',
-  district: 'Gandhinagar',
+  name: '',
+  city: '',
+  district: '',
   familyMembers: 4,
   monthlyKwh: 280,
   monthlyBillInr: 1850,
@@ -34,7 +34,7 @@ export const DEFAULT_PROFILE: HouseholdProfile = {
 
 export const DEMO_PROFILES: Record<string, HouseholdProfile> = {
   gandhinagar: {
-    name: 'Devanshi Shah',
+    name: '',
     city: 'Gandhinagar',
     district: 'Gandhinagar',
     familyMembers: 4,
@@ -45,7 +45,7 @@ export const DEMO_PROFILES: Record<string, HouseholdProfile> = {
     hasSolarInstalled: false,
   },
   ahmedabad: {
-    name: 'Jignesh & Hetal Patel',
+    name: '',
     city: 'Ahmedabad',
     district: 'Ahmedabad',
     familyMembers: 5,
@@ -56,7 +56,7 @@ export const DEMO_PROFILES: Record<string, HouseholdProfile> = {
     hasSolarInstalled: false,
   },
   surat: {
-    name: 'Pooja Choksi',
+    name: '',
     city: 'Surat',
     district: 'Surat',
     familyMembers: 3,
@@ -79,6 +79,16 @@ export function loadAppState(): AppState {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed.profile) {
+        if (
+          !parsed.isOnboarded &&
+          (parsed.profile.name === 'Devanshi Shah' ||
+            parsed.profile.name === 'Jignesh & Hetal Patel' ||
+            parsed.profile.name === 'Pooja Choksi')
+        ) {
+          parsed.profile.name = '';
+          parsed.profile.city = '';
+          parsed.profile.district = '';
+        }
         return parsed;
       }
     }

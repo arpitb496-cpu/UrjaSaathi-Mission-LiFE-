@@ -62,34 +62,34 @@ export const CommunityView: React.FC<CommunityViewProps> = ({ appState }) => {
   return (
     <div className="space-y-6 pb-12">
       {/* Banner */}
-      <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-emerald-950 rounded-2xl p-6 sm:p-8 text-white shadow-xl">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs relative overflow-hidden">
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2 max-w-xl">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-700/60 border border-emerald-500/30 text-xs font-semibold text-lime-300">
-              <Users className="w-4 h-4" />
+            <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800">
+              <span className="w-2 h-2 rounded-full bg-[#059669]" />
               <span>Gujarat Mission LiFE Citizen Community</span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold font-heading">
-              Statewide Green Movement & District Rankings
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight font-heading">
+              Statewide Green Movement &amp; District Rankings
             </h1>
-            <p className="text-sm text-emerald-100/90 leading-relaxed">
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
               Join thousands of households across Gujarat making collective, daily micro-commitments
               to decarbonise our power grid and protect the environment.
             </p>
           </div>
 
           {/* User's position card */}
-          <div className="bg-white/10 backdrop-blur-md p-4 rounded-xl border border-white/20 self-start md:self-auto shrink-0 flex items-center gap-4">
-            <div className="w-12 h-12 rounded-full bg-emerald-600 flex items-center justify-center font-bold text-lg text-lime-300 font-heading">
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/80 self-start md:self-auto shrink-0 flex items-center gap-4">
+            <div className="w-12 h-12 rounded-full bg-[#14532D] flex items-center justify-center font-bold text-lg text-[#A3E635] font-heading">
               #12
             </div>
             <div className="space-y-0.5">
-              <div className="text-[10px] text-emerald-200 uppercase tracking-wider font-semibold">
+              <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">
                 Your Gujarat Rank
               </div>
-              <div className="text-sm font-bold text-white">{profile.name}</div>
-              <div className="text-xs text-lime-300 font-medium">
-                {aggregates.effectiveGreenScore} Pts • {profile.district}
+              <div className="text-sm font-bold text-slate-900">{profile.name}</div>
+              <div className="text-xs text-[#059669] font-semibold">
+                {aggregates.effectiveGreenScore} Pts · {profile.district}
               </div>
             </div>
           </div>

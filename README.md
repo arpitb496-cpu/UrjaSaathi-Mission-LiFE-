@@ -58,38 +58,47 @@ flowchart TD
 
 ---
 
-## 📋 Core Modules
+## 📋 Simplified Architecture & Core Sections
 
-1. **Module 1: User Onboarding**
-   - Multi-step wizard capturing Household Name, City, Gujarat District (all 33 districts supported), Family Size, Monthly Electricity Consumption (kWh), Average Monthly Bill (₹), Major Appliances, and Shadow-Free Rooftop Area (sq.ft).
-   - Real-time preview of calculated baseline Green Score and monthly carbon footprint.
-2. **Module 2: Personal Dashboard**
-   - Live Green Score meter out of 100 with status tiers (*Urja Ratna*, *Urja Rakshak*, *Prakriti Mitra*, *LiFE Aarambh*).
-   - 6 key live metric cards: Green Score, Monthly Carbon (kg CO2), Power Usage (kWh), Energy Saved, Money Saved (₹), Completed Missions & Streak count.
-   - Interactive Recharts: 6-month historical consumption vs Mission LiFE target, appliance load distribution donut, and carbon offset trajectory.
-3. **Module 3: AI Green Coach (UrjaGuru)**
-   - Powered by Gemini 3.8 Flash through server-side endpoints.
-   - Generates personalized recommendations quantifying monthly kWh and ₹ saved.
-   - Generates customized 7-Day Green Action Plan checklists.
-   - Interactive "Ask UrjaAI" conversational assistant answering questions on Gujarat DISCOM tariffs and PM Surya Ghar subsidies.
-   - Automatic fallback to high-quality GEDA knowledge engine if API keys are not supplied.
-4. **Module 4: Daily Green Missions**
-   - 14 interactive sustainability challenges with difficulty ratings, points, and carbon metrics.
-   - Confetti celebration, haptic/visual completion feedback, category filtering, and streak counter.
-5. **Module 5: Rooftop Solar Calculator**
-   - Configurable inputs: consumption, rooftop area, Gujarat district, current bill, tariff rate, hybrid battery option.
-   - Recommends PV capacity (kW), monthly generation (kWh), PM Surya Ghar Central Financial Assistance (₹30,000 for 1kW, ₹60,000 for 2kW, ₹78,000 for 3kW+), net investment cost, annual savings, and payback period (~2.9 - 4.5 years in Gujarat).
-   - Includes transparent formula disclosures, eligibility conditions, source references, and PDF feasibility report generation.
-6. **Module 6: Community & Leaderboard**
-   - Gujarat-wide green champions leaderboard with user rank highlighting (`#12 YOU`).
-   - Clear distinction between real user data (`● Real User (Active)`) and simulated demonstration cohort profiles (`Simulated Demo Data`).
-   - 33-district comparison (Ahmedabad, Surat, Vadodara, Rajkot, Gandhinagar, Bhavnagar, Kutch, etc.).
-   - Interactive Community Drives (*Gujarat 24°C Summer AC Drive*, *Terrace Solar Survey Sprint*) with progress tracking.
-7. **Module 7: Green Impact Passport**
-   - Prototype digital sustainability credential with unique ID (`GEDA-LIFE-GJ-2026-XXXX`).
-   - Clearly labeled as a demonstration concept model for the GEDA Mission LiFE Hackathon (not an officially issued government certificate).
-   - Quantified impact credentials: Green Score, CO2 eliminated, money saved, tree equivalent.
-   - Verified LiFE badges showcase with unlock conditions, simulated QR verification, and printable/exportable card.
+The application is structured around a citizen-centric UX paradigm ("5-second clarity: How much power do I use? How much money can I save? What should I do today?"). The interface is organized into **Five Primary Sections** and **One Secondary Section**:
+
+1. **Home (`/` or `?tab=home`)**
+   - **5-Second Clarity Dashboard:** Immediate display of Household Green Score (out of 100) with tier and streak counter.
+   - **Executive Key Metrics:** Monthly Electricity Consumption (kWh) and Monthly Money Savings Potential (₹).
+   - **Today's Priority Action:** Exactly one featured high-impact action with immediate one-click completion and celebratory feedback.
+   - **Progressive Disclosure:** Clean 6-month historical consumption trend vs. LiFE benchmark, with deep-links to detailed analytics and community standings.
+
+2. **My Energy (`?tab=my-energy`)**
+   - **Executive Energy Summary:** 4 comprehensive metric cards (Monthly kWh, Monthly Bill, Carbon Footprint, Potential Savings) with printable energy report.
+   - **Interactive Smart Appliance Energy Calculator:** Real-time formula $\text{kWh} = \text{Watts} \times \text{Hours} \times \text{Days} \div 1000$ with quick presets (170W gaming laptop, 200W cooler, 1.5T AC, 28W BLDC fan, geyser, etc.) and explicit distinction between peak rated capacity and continuous power draw.
+   - **Appliance Load Distribution Donut & 6-Month Comparison:** Visual breakdown of major household appliances and historical tracking against LiFE targets.
+   - **Transparent Methodology Accordions:** Documented CEA Version 22.0 (0.675 kg CO₂/kWh) baseline and Gujarat DISCOM slab tariffs (UGVCL, PGVCL, DGVCL, MGVCL, Torrent Power).
+
+3. **Green Missions (`?tab=missions`)**
+   - **Focused Daily Experience:** Clean top header with streak counter, LiFE points, and featured daily priority.
+   - **14 Certified Mission LiFE Challenges:** Categorized into Cooling, Lighting, Appliances, Solar, Habits, and Peak Management.
+   - **Science-Backed Impact:** Clear carbon reduction (kg CO₂) and rupee savings metrics for every action.
+   - **Progressive Disclosure:** Displays top priority challenges first with a clean toggle to explore all 14 missions.
+
+4. **UrjaGuru AI (`?tab=coach`)**
+   - **Conversational Intelligence:** Chat-first dedicated interface powered by Gemini 3.8 Flash via server-side endpoints with multi-turn conversation memory.
+   - **Smart Electricity Math:** Dynamically calculates appliance consumption and costs with transparent assumptions.
+   - **Continuous vs. Peak Rated Nuance:** Accurately distinguishes peak adapter ratings (e.g. 170W gaming laptop power brick) from actual continuous draw (~100W–130W gaming, ~35W–50W web browsing, ~15W trickle charge, <1W standby).
+   - **Trilingual Comprehension:** Fluently understands and responds in English, Hindi, and Gujarati/Hinglish.
+   - **Strict Intent Discipline:** Directly addresses the user's specific query without generic or irrelevant inserts.
+   - **4 Quick Prompt Chips & Clear History:** Instant access to common appliance questions and one-click chat reset.
+
+5. **Solar & Savings (`?tab=solar`)**
+   - **Interactive Rooftop Solar Feasibility:** Configurable inputs for monthly consumption, shadow-free rooftop area, Gujarat district, current bill, DISCOM tariff, and hybrid battery option.
+   - **Central Subsidy Modeling:** PM Surya Ghar Muft Bijli Yojana Central Financial Assistance (₹30,000 for 1kW, ₹60,000 for 2kW, ₹78,000 for 3kW+).
+   - **Regulatory Compliance:** Integrates GERC Grid Interactive Distributed Renewable Energy Sources (GIDRES) Regulations, 2026 (notified 30 Oct 2026) with explicit ₹2.25/kWh surplus injection compensation.
+   - **System Performance Ratio (PR):** Explicit PR (0.825) with configurable system losses (default 17.5%) and PDF feasibility report generation.
+
+6. **Secondary Section: My Impact (`?tab=impact`)**
+   - **Achievements & Badges:** Unlocked sustainability milestones and credentials.
+   - **Community Leaderboard:** Gujarat-wide green champions with active user rank highlighting and simulated demo cohort labeling.
+   - **33-District Rankings:** Performance comparisons across all 33 Gujarat administrative districts.
+   - **Green Impact Passport:** Prototype digital sustainability credential (`GEDA-LIFE-GJ-2026-XXXX`) with QR verification code, verified badge roster, and printable card (clearly labeled as a prototype hackathon credential).
 
 ---
 
@@ -187,11 +196,23 @@ $$\text{Payback (Years)} = \frac{\text{Gross Capital Cost} - \text{PM Surya Ghar
 Run the test suite using Node's built-in test runner:
 ```bash
 npm run test
-# OR
-npx tsx --test src/utils/sustainabilityMath.test.ts
+# Runs:
+# 1. src/utils/sustainabilityMath.test.ts (sustainability baselines & solar formulas)
+# 2. src/utils/aiCoachPipeline.test.ts (10 conversational test cases & smart math verification)
 ```
 
-All 5 core test suites pass verifying per-capita calculations, edge case usage, solar capacity sizing, subsidy caps, and CEA emission factors.
+All 15 comprehensive unit tests pass:
+- **Case 1:** 170W Gaming Laptop on charger (unit calculation $170\text{W} \times 8\text{h} \div 1000 = 1.36\text{ units}$, rated vs continuous breakdown, and domestic tariff cost).
+- **Case 2:** Laptop Charger Idle/Vampire Load when plugged into wall without laptop ($\sim 0.3\text{W} - 1.5\text{W}$, $<0.5\text{ units/month}$).
+- **Case 3:** 1.5 Ton Inverter AC electricity consumption and compressor cycling.
+- **Case 4:** Hinglish query handling (*"Bhai mera 200W cooler din me 10 ghante chale toh kitna bill aayega?"* $\rightarrow 2.0\text{ units}$, ₹12.50/day).
+- **Case 5:** Hindi query handling (*"3kW solar panel lagwane par kitni subsidy milegi Gujarat me?"* $\rightarrow$ ₹78,000 CFA & ₹2.25/kWh surplus injection under GERC GIDRES 2026).
+- **Case 6:** Ceiling fan comparison ($75\text{W}$ induction vs $28\text{W}$ BLDC motor).
+- **Case 7:** Refrigerator continuous cycling calculation.
+- **Case 8:** Electric Geyser consumption ($2000\text{W} \times 1\text{h} \div 1000 = 2\text{ units}$).
+- **Case 9:** Standalone mathematical verification across varied wattages.
+- **Case 10:** Intent-specific offline fallback handling with explicit engine labeling and zero canned AC replies.
+- **Cases 11–15:** CEA Version 22.0 FY 2025-26 weighted average emission factor ($0.675\text{ kg CO}_2\text{/kWh}$), solar sizing, GERC 2026 regulations, and custom system losses.
 
 ---
 

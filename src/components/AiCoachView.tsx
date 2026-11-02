@@ -16,8 +16,18 @@ import {
   ShieldCheck,
   MessageSquare,
   Flame,
+  RotateCcw,
 } from 'lucide-react';
 import { HouseholdProfile } from '../utils/sustainabilityMath';
+import {
+  generateSmartFallbackResponse,
+  ResponseMode,
+  QueryIntent,
+  ChatMessageItem,
+  insertResponseForRequest,
+  buildCoachWelcomeMessage,
+  getCleanProfileContext,
+} from '../utils/energyMathChat';
 
 interface AiCoachViewProps {
   profile: HouseholdProfile;
@@ -42,15 +52,15 @@ interface ActionPlanItem {
   focus: string;
 }
 
-interface ChatMessage {
-  id: string;
-  sender: 'user' | 'ai';
-  text: string;
-  timestamp: string;
-}
+type ChatMessage = ChatMessageItem;
 
 export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMission }) => {
-  const [activeTab, setActiveTab] = useState<'recommendations' | 'plan' | 'chat'>('recommendations');
+  const [activeTab, setActiveTab] = useState<'chat' | 'recommendations' | 'plan'>('chat');
+  const { userName: cleanName, district: cleanDistrict } = getCleanProfileContext(profile);
+  const locationSuffix = cleanDistrict ? ` in ${cleanDistrict}` : '';
+  const summaryHeading = cleanName
+    ? `Analysis for ${cleanName}${locationSuffix}`
+    : `Household Analysis${locationSuffix}`;
 
   // Recommendations state
   const [loadingCoach, setLoadingCoach] = useState<boolean>(false);
@@ -60,13 +70,13 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
     recommendations: CoachRecommendation[];
     source?: string;
   }>({
-    summary: `Analysis for ${profile.name} in ${profile.district}: Your household uses ${profile.monthlyKwh} kWh/month. Optimizing air conditioning and shifting standby loads can save up to 18-22% on your electricity bill.`,
-    districtNotes: `${profile.district} benefits from high solar insolation (~5.2 kWh/m²/day). Participating in GEDA LiFE initiatives directly cuts peak load drawn from the Western Regional Grid.`,
+    summary: `${summaryHeading}: Your household uses ${profile.monthlyKwh} kWh/month. Optimizing air conditioning and shifting standby loads can save up to 18-22% on your electricity bill.`,
+    districtNotes: `${cleanDistrict || 'Your region'} benefits from high solar insolation (~5.2 kWh/m²/day). Participating in GEDA LiFE initiatives directly cuts peak load drawn from the Western Regional Grid.`,
     source: 'gemini_ai',
     recommendations: [
       {
         title: 'Calibrate AC to 24°C or Above (Mission LiFE Standard)',
-        description: 'Set your air conditioner thermostat strictly at 24°C instead of 18°C-20°C. For every 1°C increase, compressor electricity consumption decreases by 6% in Gujarat summers.',
+        description: 'Set your air conditioner thermostat strictly at 24°C instead of 18°C-20°C. For every 1°C increase, compressor electricity consumption decreases by 6% in summers.',
         estimatedMonthlyKwhSaved: Math.round(profile.monthlyKwh * 0.14),
         estimatedMonthlyInrSaved: Math.round(profile.monthlyKwh * 0.14 * 6.25),
         difficulty: 'Instant',
@@ -74,7 +84,7 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
       },
       {
         title: 'Adopt Surya Gujarat Rooftop Solar (PM Surya Ghar)',
-        description: `With ${profile.rooftopAvailableSqFt || 300} sq.ft of terrace in ${profile.district}, you are eligible for up to ₹78,000 Central financial subsidy. This can slash your electricity bill by 75-90%.`,
+        description: `With ${profile.rooftopAvailableSqFt || 300} sq.ft of terrace${locationSuffix}, you are eligible for up to ₹78,000 Central financial subsidy. This can slash your electricity bill by 75-90%.`,
         estimatedMonthlyKwhSaved: Math.round(profile.monthlyKwh * 0.75),
         estimatedMonthlyInrSaved: Math.round(profile.monthlyKwh * 0.75 * 6.25),
         difficulty: 'High Impact',
@@ -105,12 +115,14 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
   const [completedDays, setCompletedDays] = useState<Record<number, boolean>>({ 1: true });
 
   // Chat state
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => [
     {
       id: 'init',
       sender: 'ai',
-      text: `Namaste ${profile.name}! I am UrjaGuru, your AI Green Energy Coach certified for GEDA Mission LiFE in ${profile.district}. How can I assist you today? You can ask about solar subsidies, peak hour tariffs, or reducing your electricity bill.`,
+      text: buildCoachWelcomeMessage(profile),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      mode: 'offline_mode',
+      modeLabel: 'Offline Mode',
     },
   ]);
   const [chatInput, setChatInput] = useState<string>('');
@@ -118,6 +130,17 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
 
   // Adopt feedback notification
   const [adoptedAlert, setAdoptedAlert] = useState<string | null>(null);
+
+  // Sync welcome banner if user updates their name or district in profile settings
+  useEffect(() => {
+    setChatMessages((prev) =>
+      prev.map((m) =>
+        m.id === 'init' || m.id === 'welcome'
+          ? { ...m, text: buildCoachWelcomeMessage(profile) }
+          : m
+      )
+    );
+  }, [profile.name, profile.district]);
 
   // Fetch coach recommendations
   const fetchCoachRecommendations = async () => {
@@ -165,15 +188,27 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
   // Handle chat submission
   const handleSendMessage = async (e?: React.FormEvent, customQuery?: string) => {
     if (e) e.preventDefault();
-    const query = customQuery || chatInput.trim();
+    const query = (customQuery || chatInput).trim();
     if (!query || chatLoading) return;
 
+    const clientReqId = 'req_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
     const userMsg: ChatMessage = {
-      id: String(Date.now()),
+      id: `user_${clientReqId}`,
       sender: 'user',
       text: query,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      reqId: clientReqId,
     };
+
+    // Prepare multi-turn history excluding static initial welcome banners
+    const priorConversation = chatMessages
+      .filter((m) => m.id !== 'init' && m.id !== 'welcome')
+      .slice(-8)
+      .map((m) => ({
+        sender: m.sender,
+        text: m.text,
+      }));
 
     setChatMessages((prev) => [...prev, userMsg]);
     setChatInput('');
@@ -183,25 +218,69 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
       const res = await fetch('/api/gemini/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: query, profile }),
+        body: JSON.stringify({
+          message: query,
+          profile,
+          history: priorConversation,
+          reqId: clientReqId,
+        }),
       });
+
+      if (!res.ok) {
+        throw new Error(`Chat API responded with status ${res.status}`);
+      }
+
       const data = await res.json();
+      const returnedReqId = data.reqId || clientReqId;
+
+      // Verify response belongs to this exact originating request
+      if (returnedReqId !== clientReqId) {
+        throw new Error(`Mismatched response reqId: expected ${clientReqId}, got ${returnedReqId}`);
+      }
+
+      let responseText = data.response;
+      let responseMode: ResponseMode = data.mode || 'gemini_ai';
+      let responseModeLabel = data.modeLabel || (responseMode === 'gemini_ai' ? 'Gemini AI' : 'Smart Calculation');
+      let responseIntent: QueryIntent | undefined = data.intent;
+
+      if (!responseText) {
+        const smartFallback = generateSmartFallbackResponse(query, profile, false, priorConversation);
+        responseText = smartFallback.response;
+        responseMode = smartFallback.mode;
+        responseModeLabel = smartFallback.modeLabel;
+        responseIntent = smartFallback.intent;
+      }
+
       const aiReply: ChatMessage = {
-        id: String(Date.now() + 1),
+        id: `ai_${clientReqId}`,
         sender: 'ai',
-        text: data.response || 'I am ready to help you optimize your green energy consumption.',
+        text: responseText,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        mode: responseMode,
+        modeLabel: responseModeLabel,
+        reqId: clientReqId,
+        intent: responseIntent,
       };
-      setChatMessages((prev) => [...prev, aiReply]);
+      setChatMessages((prev) => insertResponseForRequest(prev, clientReqId, aiReply));
     } catch (err) {
-      console.error('Chat error:', err);
+      console.error('Chat error, using client-side smart calculation engine:', err);
+      const smartFallback = generateSmartFallbackResponse(
+        query,
+        profile,
+        true,
+        priorConversation
+      );
       const fallbackReply: ChatMessage = {
-        id: String(Date.now() + 1),
+        id: `ai_${clientReqId}`,
         sender: 'ai',
-        text: 'Keeping your AC at 24°C and switching off idle vampire loads cuts up to 20% from your monthly electricity bill in Gujarat.',
+        text: smartFallback.response,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        mode: smartFallback.mode,
+        modeLabel: smartFallback.modeLabel,
+        reqId: clientReqId,
+        intent: smartFallback.intent,
       };
-      setChatMessages((prev) => [...prev, fallbackReply]);
+      setChatMessages((prev) => insertResponseForRequest(prev, clientReqId, fallbackReply));
     } finally {
       setChatLoading(false);
     }
@@ -225,18 +304,18 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
   return (
     <div className="space-y-6 pb-12">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-emerald-900 via-emerald-800 to-teal-900 rounded-2xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs relative overflow-hidden">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2 max-w-xl">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-700/60 border border-emerald-500/30 text-xs font-semibold text-lime-300">
-              <Bot className="w-4 h-4" />
-              <span>UrjaGuru AI Green Coach • Gemini 3.8 Flash Powered</span>
+            <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800">
+              <span className="w-2 h-2 rounded-full bg-[#059669]" />
+              <span>UrjaGuru AI Green Coach · Gemini 3.5 Flash Powered</span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold font-heading">
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight font-heading">
               Personalized Green Energy Intelligence
             </h1>
-            <p className="text-sm text-emerald-100/90 leading-relaxed">
-              Analyzes your {profile.familyMembers}-member household in {profile.district} consuming{' '}
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+              Analyzes your {profile.familyMembers}-member household{locationSuffix} consuming{' '}
               {profile.monthlyKwh} kWh/mo to generate actionable, rupee-quantified efficiency gains.
             </p>
           </div>
@@ -247,7 +326,7 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
                 fetchCoachRecommendations();
                 fetchActionPlan();
               }}
-              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-white flex items-center gap-1.5 transition-colors"
+              className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200/80 border border-slate-200 text-xs font-bold text-slate-700 flex items-center gap-1.5 transition-colors"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loadingCoach ? 'animate-spin' : ''}`} />
               Re-Analyze Profile
@@ -265,6 +344,17 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
 
       {/* Tabs */}
       <div className="flex items-center border-b border-gray-200 gap-2 overflow-x-auto">
+        <button
+          onClick={() => setActiveTab('chat')}
+          className={`pb-3 px-4 text-xs sm:text-sm font-bold transition-all relative flex items-center gap-2 whitespace-nowrap ${
+            activeTab === 'chat'
+              ? 'text-emerald-700 border-b-2 border-emerald-600'
+              : 'text-gray-500 hover:text-gray-800'
+          }`}
+        >
+          <MessageSquare className="w-4 h-4 text-emerald-600" />
+          UrjaGuru AI Assistant
+        </button>
         <button
           onClick={() => setActiveTab('recommendations')}
           className={`pb-3 px-4 text-xs sm:text-sm font-bold transition-all relative flex items-center gap-2 whitespace-nowrap ${
@@ -287,17 +377,6 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
           <Calendar className="w-4 h-4 text-emerald-600" />
           7-Day Green Action Plan
         </button>
-        <button
-          onClick={() => setActiveTab('chat')}
-          className={`pb-3 px-4 text-xs sm:text-sm font-bold transition-all relative flex items-center gap-2 whitespace-nowrap ${
-            activeTab === 'chat'
-              ? 'text-emerald-700 border-b-2 border-emerald-600'
-              : 'text-gray-500 hover:text-gray-800'
-          }`}
-        >
-          <MessageSquare className="w-4 h-4 text-emerald-600" />
-          Ask UrjaAI Assistant
-        </button>
       </div>
 
       {/* TAB 1: RECOMMENDATIONS */}
@@ -315,13 +394,13 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
                 </p>
                 {coachData.districtNotes && (
                   <p className="text-xs text-emerald-800 bg-emerald-50/80 p-2.5 rounded-lg border border-emerald-200/60 mt-2">
-                    <strong>Gujarat Climate & Grid Context:</strong> {coachData.districtNotes}
+                    <strong>Climate &amp; Grid Context:</strong> {coachData.districtNotes}
                   </p>
                 )}
               </div>
               <div className="shrink-0 text-right hidden sm:block">
                 <span className="text-[10px] text-gray-400 font-mono">
-                  Engine: {coachData.source || 'gemini_ai'}
+                  Engine: {coachData.source === 'gemini_ai' ? 'Gemini 3.5 Flash (Live)' : 'Mission LiFE Knowledge Engine'}
                 </span>
               </div>
             </div>
@@ -333,7 +412,7 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
               <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center justify-between animate-pulse">
                 <span className="flex items-center gap-1.5 font-semibold">
                   <Sparkles className="w-4 h-4 text-emerald-600" />
-                  UrjaGuru is querying Gemini 3.8 Flash for customized Gujarat tariff insights...
+                  UrjaGuru is querying Gemini 3.5 Flash for customized tariff insights...
                 </span>
                 <span className="text-[10px] bg-emerald-200/80 px-2 py-0.5 rounded font-mono">
                   Live AI Syncing
@@ -407,10 +486,10 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
           <div className="bg-white p-5 rounded-2xl border border-emerald-100 shadow-xs flex items-center justify-between">
             <div>
               <h3 className="font-bold text-gray-900 font-heading text-base">
-                Your Gujarat 7-Day Sustainability Sprint
+                Your 7-Day Sustainability Sprint
               </h3>
               <p className="text-xs text-gray-500 mt-0.5">
-                Daily step-by-step habit checklist tailored for {profile.district}.
+                Daily step-by-step habit checklist tailored for {cleanDistrict || 'your household'}.
               </p>
             </div>
             <div className="text-right">
@@ -496,28 +575,49 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
                   UrjaGuru Q&A Assistant
                 </h3>
                 <p className="text-[10px] text-gray-500">
-                  GEDA Mission LiFE Knowledge Base • Gemini 3.8 Flash
+                  Mission LiFE Knowledge Base • Gemini 3.5 Flash &amp; Smart Math Engine
                 </p>
               </div>
             </div>
-            <span className="text-[10px] bg-emerald-100 text-emerald-800 font-semibold px-2 py-0.5 rounded-full">
-              Live & Context Aware
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] bg-emerald-100 text-emerald-800 font-semibold px-2 py-0.5 rounded-full hidden sm:inline">
+                Live &amp; Context Aware
+              </span>
+              <button
+                onClick={() => {
+                  setChatMessages([
+                    {
+                      id: 'welcome',
+                      sender: 'ai',
+                      text: buildCoachWelcomeMessage(profile),
+                      timestamp: 'Just now',
+                      mode: 'offline_mode',
+                      modeLabel: 'Offline Mode',
+                    },
+                  ]);
+                }}
+                className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-100 px-2 py-1 rounded-lg border border-slate-200 flex items-center gap-1 transition-colors"
+                title="Clear current conversation history"
+              >
+                <RotateCcw className="w-3 h-3 text-slate-400" />
+                <span>Clear History</span>
+              </button>
+            </div>
           </div>
 
-          {/* Quick Prompts Bar */}
+          {/* Quick Prompts Bar (4 focused prompts) */}
           <div className="p-2.5 bg-gray-50/70 border-b border-gray-100 flex items-center gap-2 overflow-x-auto text-[11px] scrollbar-none">
             <span className="text-gray-400 font-semibold shrink-0">Try asking:</span>
             {[
-              'How much subsidy do I get for 3 kW solar in Gujarat?',
-              'Why is 24°C best for AC in Gujarat heat?',
-              'How do I eliminate standby power at night?',
-              'What is my DISCOM net metering rate in Gujarat?',
+              '170W gaming laptop on charger for 8 hours: how many units?',
+              '200W air cooler running 10 hours daily cost in Gujarat?',
+              'How much subsidy do I get for 3 kW rooftop solar?',
+              'Does leaving an idle charger plugged in consume electricity?',
             ].map((promptText, i) => (
               <button
                 key={i}
                 onClick={() => handleSendMessage(undefined, promptText)}
-                className="whitespace-nowrap px-2.5 py-1 bg-white hover:bg-emerald-50 text-gray-700 hover:text-emerald-800 rounded-md border border-gray-200 transition-colors shrink-0"
+                className="whitespace-nowrap px-2.5 py-1 bg-white hover:bg-emerald-50 text-gray-700 hover:text-emerald-800 rounded-md border border-gray-200 transition-colors shrink-0 font-medium"
               >
                 {promptText}
               </button>
@@ -544,7 +644,7 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
                 </div>
                 <div>
                   <div
-                    className={`p-3 rounded-2xl text-xs sm:text-sm leading-relaxed ${
+                    className={`p-3 rounded-2xl text-xs sm:text-sm leading-relaxed whitespace-pre-wrap ${
                       msg.sender === 'user'
                         ? 'bg-emerald-600 text-white rounded-tr-none'
                         : 'bg-gray-100 text-gray-900 rounded-tl-none'
@@ -552,9 +652,39 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
                   >
                     {msg.text}
                   </div>
-                  <span className="text-[10px] text-gray-400 mt-1 block px-1">
-                    {msg.timestamp}
-                  </span>
+                  <div className="flex items-center gap-2 mt-1 px-1">
+                    <span className="text-[10px] text-gray-400">
+                      {msg.timestamp}
+                    </span>
+                    {msg.sender === 'ai' && msg.mode && (
+                      <span className="inline-flex items-center gap-1 text-[9px] font-semibold">
+                        {msg.mode === 'gemini_ai' && (
+                          <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1 px-1.5 py-0.5 rounded">
+                            <Sparkles className="w-2.5 h-2.5 text-emerald-600" />
+                            Gemini AI
+                          </span>
+                        )}
+                        {msg.mode === 'smart_calculation' && (
+                          <span className="bg-teal-100 text-teal-800 border border-teal-200 inline-flex items-center gap-1 px-1.5 py-0.5 rounded">
+                            <Zap className="w-2.5 h-2.5 text-teal-600" />
+                            Smart Calculation
+                          </span>
+                        )}
+                        {msg.mode === 'offline_mode' && (
+                          <span className="bg-slate-100 text-slate-700 border border-slate-200 inline-flex items-center gap-1 px-1.5 py-0.5 rounded">
+                            <ShieldCheck className="w-2.5 h-2.5 text-slate-600" />
+                            Offline Mode
+                          </span>
+                        )}
+                        {msg.mode === 'unavailable' && (
+                          <span className="bg-amber-100 text-amber-800 border border-amber-200 inline-flex items-center gap-1 px-1.5 py-0.5 rounded">
+                            <AlertCircle className="w-2.5 h-2.5 text-amber-600" />
+                            Unavailable
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
@@ -577,7 +707,7 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
               type="text"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              placeholder={`Ask a question regarding energy conservation in ${profile.district}...`}
+              placeholder={`Ask a question regarding energy conservation${cleanDistrict ? ` in ${cleanDistrict}` : ''}...`}
               className="flex-1 px-3.5 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs sm:text-sm"
             />
             <button

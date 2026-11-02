@@ -77,17 +77,17 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
   return (
     <div className="space-y-6 pb-12">
       {/* Hero Banner */}
-      <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-emerald-950 rounded-2xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs relative overflow-hidden">
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2 max-w-xl">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-700/60 border border-emerald-500/30 text-xs font-semibold text-lime-300">
-              <Sun className="w-4 h-4 text-yellow-300" />
-              <span>Surya Gujarat & PM Surya Ghar: Muft Bijli Yojana Compliant</span>
+            <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800">
+              <span className="w-2 h-2 rounded-full bg-[#059669]" />
+              <span>Surya Gujarat &amp; PM Surya Ghar: Muft Bijli Yojana Compliant</span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold font-heading">
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight font-heading">
               Interactive Rooftop Solar Feasibility
             </h1>
-            <p className="text-sm text-emerald-100/90 leading-relaxed">
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
               Gujarat receives over 300 sunny days annually with high solar insolation (~5.2 kWh/m²/day).
               Calculate system capacity, Central government subsidies, and payback economics.
             </p>
@@ -95,9 +95,9 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
 
           <button
             onClick={() => setShowPrintModal(true)}
-            className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-white flex items-center gap-2 transition-colors self-start md:self-auto shrink-0"
+            className="px-4 py-2.5 rounded-xl bg-[#14532D] hover:bg-emerald-900 text-xs font-bold text-white flex items-center gap-2 transition-all shadow-xs self-start md:self-auto shrink-0"
           >
-            <FileText className="w-4 h-4 text-lime-300" />
+            <FileText className="w-4 h-4 text-[#A3E635]" />
             <span>Generate PDF Feasibility Summary</span>
           </button>
         </div>
