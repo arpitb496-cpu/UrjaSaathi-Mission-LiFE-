@@ -513,6 +513,54 @@ export class MissionCompletionCoordinator {
   }
 }
 
+export function getStorageKeyForUser(userId?: string): string {
+  const cleanId = (userId || '').trim();
+  if (!cleanId || cleanId === DEFAULT_USER_ID) {
+    return STORAGE_KEY;
+  }
+  return `urjasaathi_user_state_v2_${cleanId}`;
+}
+
+export function getChatStorageKeyForUser(userId?: string): string {
+  const cleanId = (userId || '').trim() || DEFAULT_USER_ID;
+  return `urjasaathi_chat_history_v2_${cleanId}`;
+}
+
+/**
+ * Creates a clean, isolated initial state for an authenticated Google user.
+ * - Uses the authenticated Supabase user UUID as internal userId.
+ * - Pre-fills only the authenticated Google user's name (never hardcodes names or districts).
+ * - Never transfers anonymous or demo mission records into the authenticated Google account.
+ */
+export function createInitialAuthenticatedUserState(
+  authUser: {
+    id: string;
+    name?: string;
+    email?: string;
+    avatarUrl?: string | null;
+  },
+  now: Date = new Date()
+): AppState {
+  const userId = authUser.id.trim();
+  return reconcileStreakOnLoad(
+    {
+      userId,
+      profile: {
+        ...DEFAULT_PROFILE,
+        name: (authUser.name || '').trim(),
+        city: '',
+        district: '',
+      },
+      isOnboarded: false,
+      completedMissions: {},
+      streakDays: 0,
+      lastActiveDate: '',
+      badges: ['LiFE Pioneer'],
+    },
+    now
+  );
+}
+
 export function createInitialSeedState(now: Date = new Date()): AppState {
   const userId = DEFAULT_USER_ID;
   const yesterdayDate = new Date(now.getTime() - 86400000);
@@ -556,10 +604,14 @@ export function createInitialSeedState(now: Date = new Date()): AppState {
   };
 }
 
-export function loadAppState(now: Date = new Date()): AppState {
+export function loadAppState(now: Date = new Date(), userId?: string): AppState {
+  const cleanUserId = (userId || '').trim();
+  const isAuthenticatedUser = Boolean(cleanUserId && cleanUserId !== DEFAULT_USER_ID);
+  const storageKey = getStorageKeyForUser(cleanUserId);
+
   try {
     if (typeof localStorage !== 'undefined') {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(storageKey);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && parsed.profile) {
@@ -573,13 +625,32 @@ export function loadAppState(now: Date = new Date()): AppState {
             parsed.profile.city = '';
             parsed.profile.district = '';
           }
-          // Reconcile streak and normalize completion keys without incrementing streak on load
-          return reconcileStreakOnLoad(parsed as AppState, now);
+          // Strictly isolate mission completions to this user ID
+          const targetId = isAuthenticatedUser ? cleanUserId : parsed.userId || DEFAULT_USER_ID;
+          const filteredMissions: Record<string, CompletedMissionLog> = {};
+          for (const [k, v] of Object.entries(parsed.completedMissions || {})) {
+            const log = v as CompletedMissionLog;
+            if (!log.userId || log.userId === targetId) {
+              filteredMissions[k] = { ...log, userId: targetId };
+            }
+          }
+          return reconcileStreakOnLoad(
+            {
+              ...(parsed as AppState),
+              userId: targetId,
+              completedMissions: filteredMissions,
+            },
+            now
+          );
         }
       }
     }
   } catch (e) {
     console.warn('Could not read localStorage state:', e);
+  }
+
+  if (isAuthenticatedUser) {
+    return createInitialAuthenticatedUserState({ id: cleanUserId }, now);
   }
 
   return createInitialSeedState(now);
@@ -588,7 +659,8 @@ export function loadAppState(now: Date = new Date()): AppState {
 export function saveAppState(state: AppState): void {
   try {
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      const key = getStorageKeyForUser(state.userId);
+      localStorage.setItem(key, JSON.stringify(state));
     }
   } catch (e) {
     console.error('Failed to save app state:', e);
@@ -622,3 +694,4 @@ export function calculateUserAggregates(state: AppState) {
     baselineMetrics,
   };
 }
+

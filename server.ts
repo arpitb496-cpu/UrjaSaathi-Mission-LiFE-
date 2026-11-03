@@ -25,6 +25,10 @@ import {
   verifyServerUserIdentity,
 } from './src/db/supabasePersistence.ts';
 import {
+  DEFAULT_SUPABASE_PROJECT_URL,
+  isPublicAnonKeySafe,
+} from './src/utils/supabaseAuth.ts';
+import {
   generateSolarFeasibilityPdf,
   generateGreenPassportPdf,
   generateImpactReportPdf,
@@ -55,7 +59,7 @@ app.use((req: Request, _res: Response, next) => {
   if (
     !req.url.startsWith('/api/') &&
     req.url !== '/api' &&
-    /^\/(health|gemini|missions|passport|reports|solar|auth|community)(\/|$|\?)/.test(req.url)
+    /^\/(health|gemini|missions|passport|reports|solar|auth|community|user)(\/|$|\?)/.test(req.url)
   ) {
     req.url = `/api${req.url}`;
   }
@@ -668,13 +672,45 @@ app.get('/api/community/stats', (_req: Request, res: Response) => {
 const persistenceEngine = new DurablePersistenceEngine();
 
 function setSessionCookie(res: Response, sessionToken: string) {
-  if (!sessionToken) return;
+  if (!sessionToken || !sessionToken.startsWith('urja_sess.')) return;
   const secureFlag = isProduction || Boolean(process.env.VERCEL) ? '; Secure' : '';
   res.setHeader(
     'Set-Cookie',
     `urjasaathi_session=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${secureFlag}`
   );
 }
+
+// Public browser auth configuration (strictly exposes only public anon key, NEVER service_role key)
+app.get('/api/auth/public-config', (_req: Request, res: Response) => {
+  const rawUrl =
+    process.env.VITE_SUPABASE_URL ||
+    process.env.SUPABASE_URL ||
+    DEFAULT_SUPABASE_PROJECT_URL;
+  const rawAnon =
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    '';
+
+  const check = isPublicAnonKeySafe(rawAnon);
+  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const isDistinctFromServiceRole = !serviceRoleKey || rawAnon.trim() !== serviceRoleKey;
+
+  res.json({
+    supabaseUrl: rawUrl.trim().replace(/\/+$/, ''),
+    supabaseAnonKey: check.valid && isDistinctFromServiceRole ? rawAnon.trim() : '',
+    authConfigured: Boolean(check.valid && isDistinctFromServiceRole && rawAnon.trim()),
+  });
+});
+
+// Clear server-issued session cookie on logout
+app.post('/api/auth/logout', (_req: Request, res: Response) => {
+  const secureFlag = isProduction || Boolean(process.env.VERCEL) ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `urjasaathi_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag}`
+  );
+  res.json({ loggedOut: true });
+});
 
 // Server-side Session & Persistence Status Endpoint
 app.get('/api/auth/session', async (req: Request, res: Response) => {
@@ -697,6 +733,11 @@ app.get('/api/auth/session', async (req: Request, res: Response) => {
     res.json({
       authenticated: true,
       userId: identity.userId,
+      email: identity.email || '',
+      emailVerified: Boolean(identity.emailVerified),
+      fullName: identity.fullName || '',
+      avatarUrl: identity.avatarUrl || null,
+      provider: identity.provider || null,
       authMethod: identity.authMethod,
       sessionToken: identity.sessionToken,
       bodyUserIdIgnored: identity.bodyUserIdIgnored,
@@ -704,6 +745,142 @@ app.get('/api/auth/session', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Session verification failed' });
+  }
+});
+
+// Get or initialize authenticated user's isolated household profile
+app.get('/api/user/profile', async (req: Request, res: Response) => {
+  try {
+    const identity = await verifyServerUserIdentity({
+      authorizationHeader: req.headers.authorization,
+      sessionHeader: req.headers['x-urjasaathi-session'] as string | undefined,
+      cookieHeader: req.headers.cookie,
+      untrustedBodyUserId: (req.query.userId as string) || (req.query.user_id as string),
+    });
+
+    if (!identity.authenticated) {
+      res.status(401).json({ error: identity.error || 'Unauthorized session token' });
+      return;
+    }
+
+    setSessionCookie(res, identity.sessionToken);
+    const profileRecord = await persistenceEngine.getUserHouseholdProfile(identity.userId, {
+      name: identity.fullName,
+      email: identity.email,
+      emailVerified: identity.emailVerified,
+      avatarUrl: identity.avatarUrl,
+    });
+
+    res.json({
+      userId: identity.userId,
+      authMethod: identity.authMethod,
+      email: profileRecord.email,
+      emailVerified: profileRecord.email_verified,
+      avatarUrl: profileRecord.avatar_url,
+      profile: profileRecord.profile,
+      isOnboarded: profileRecord.is_onboarded,
+      bodyUserIdIgnored: identity.bodyUserIdIgnored,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to load user profile' });
+  }
+});
+
+// Update authenticated user's isolated household profile
+app.put('/api/user/profile', async (req: Request, res: Response) => {
+  try {
+    const identity = await verifyServerUserIdentity({
+      authorizationHeader: req.headers.authorization,
+      sessionHeader: req.headers['x-urjasaathi-session'] as string | undefined,
+      cookieHeader: req.headers.cookie,
+      untrustedBodyUserId: req.body?.userId || req.body?.user_id,
+    });
+
+    if (!identity.authenticated) {
+      res.status(401).json({ error: identity.error || 'Unauthorized session token' });
+      return;
+    }
+
+    setSessionCookie(res, identity.sessionToken);
+    const rawProfile = req.body?.profile || req.body || {};
+    const saved = await persistenceEngine.saveUserHouseholdProfile(identity.userId, {
+      profile: rawProfile,
+      isOnboarded:
+        typeof req.body?.isOnboarded === 'boolean' ? req.body.isOnboarded : undefined,
+      email: identity.email,
+      emailVerified: identity.emailVerified,
+      avatarUrl: identity.avatarUrl,
+    });
+
+    res.json({
+      userId: identity.userId,
+      authMethod: identity.authMethod,
+      email: saved.email,
+      emailVerified: saved.email_verified,
+      avatarUrl: saved.avatar_url,
+      profile: saved.profile,
+      isOnboarded: saved.is_onboarded,
+      bodyUserIdIgnored: identity.bodyUserIdIgnored,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to save user profile' });
+  }
+});
+
+// Get authenticated user's isolated AI conversation history
+app.get('/api/user/chat-history', async (req: Request, res: Response) => {
+  try {
+    const identity = await verifyServerUserIdentity({
+      authorizationHeader: req.headers.authorization,
+      sessionHeader: req.headers['x-urjasaathi-session'] as string | undefined,
+      cookieHeader: req.headers.cookie,
+      untrustedBodyUserId: (req.query.userId as string) || (req.query.user_id as string),
+    });
+
+    if (!identity.authenticated) {
+      res.status(401).json({ error: identity.error || 'Unauthorized session token' });
+      return;
+    }
+
+    const messages = await persistenceEngine.getUserChatHistory(identity.userId);
+    res.json({
+      userId: identity.userId,
+      authMethod: identity.authMethod,
+      messages,
+      bodyUserIdIgnored: identity.bodyUserIdIgnored,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to load chat history' });
+  }
+});
+
+// Save authenticated user's isolated AI conversation history
+app.put('/api/user/chat-history', async (req: Request, res: Response) => {
+  try {
+    const identity = await verifyServerUserIdentity({
+      authorizationHeader: req.headers.authorization,
+      sessionHeader: req.headers['x-urjasaathi-session'] as string | undefined,
+      cookieHeader: req.headers.cookie,
+      untrustedBodyUserId: req.body?.userId || req.body?.user_id,
+    });
+
+    if (!identity.authenticated) {
+      res.status(401).json({ error: identity.error || 'Unauthorized session token' });
+      return;
+    }
+
+    const messages = await persistenceEngine.saveUserChatHistory(
+      identity.userId,
+      Array.isArray(req.body?.messages) ? req.body.messages : []
+    );
+    res.json({
+      userId: identity.userId,
+      authMethod: identity.authMethod,
+      messages,
+      bodyUserIdIgnored: identity.bodyUserIdIgnored,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to save chat history' });
   }
 });
 
@@ -723,12 +900,24 @@ app.get('/api/missions/state', async (req: Request, res: Response) => {
     }
 
     setSessionCookie(res, identity.sessionToken);
+    if (identity.authMethod === 'supabase_jwt') {
+      await persistenceEngine.getUserHouseholdProfile(identity.userId, {
+        name: identity.fullName,
+        email: identity.email,
+        emailVerified: identity.emailVerified,
+        avatarUrl: identity.avatarUrl,
+      });
+    }
     const state = await persistenceEngine.getUserAuthoritativeState(identity.userId, new Date());
     const status = persistenceEngine.getStatus();
 
     res.json({
       userId: identity.userId,
       authMethod: identity.authMethod,
+      email: identity.email || '',
+      emailVerified: Boolean(identity.emailVerified),
+      fullName: identity.fullName || '',
+      avatarUrl: identity.avatarUrl || null,
       sessionToken: identity.sessionToken,
       bodyUserIdIgnored: identity.bodyUserIdIgnored,
       state,

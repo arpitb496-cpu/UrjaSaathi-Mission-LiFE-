@@ -12,8 +12,12 @@ import {
   MapPin,
   ChevronRight,
   Sparkles,
+  LogOut,
+  LogIn,
+  ShieldCheck,
 } from 'lucide-react';
 import { AppState, calculateUserAggregates } from '../utils/storage';
+import type { AuthenticatedUserProfile } from '../utils/supabaseAuth';
 
 interface SidebarProps {
   appState: AppState;
@@ -22,6 +26,9 @@ interface SidebarProps {
   onOpenDocs: () => void;
   onSelectDemoProfile: (key: string) => void;
   onOpenProfile: () => void;
+  authUser?: AuthenticatedUserProfile | null;
+  onOpenSignIn?: () => void;
+  onSignOut?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -31,6 +38,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenDocs,
   onSelectDemoProfile,
   onOpenProfile,
+  authUser,
+  onOpenSignIn,
+  onSignOut,
 }) => {
   const { profile, streakDays, completedMissions } = appState;
   const aggregates = calculateUserAggregates(appState);
@@ -159,57 +169,104 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
 
-        {/* Quick Demo Profile Switcher Section */}
+        {/* Authenticated Google Account Summary OR Quick Demo Profile Switcher */}
         <div className="pt-5">
-          <div className="px-3 pb-2 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-            Sample Districts
-          </div>
-          <div className="space-y-1">
-            <button
-              onClick={() => onSelectDemoProfile('gandhinagar')}
-              className={`w-full text-left px-3.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
-                profile.district === 'Gandhinagar'
-                  ? 'bg-slate-100 text-[#14532D] font-semibold'
-                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <span>Gandhinagar</span>
-              {profile.district === 'Gandhinagar' && (
-                <div className="w-1.5 h-1.5 rounded-full bg-[#059669]" />
-              )}
-            </button>
-            <button
-              onClick={() => onSelectDemoProfile('ahmedabad')}
-              className={`w-full text-left px-3.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
-                profile.district === 'Ahmedabad'
-                  ? 'bg-slate-100 text-[#14532D] font-semibold'
-                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <span>Ahmedabad</span>
-              {profile.district === 'Ahmedabad' && (
-                <div className="w-1.5 h-1.5 rounded-full bg-[#059669]" />
-              )}
-            </button>
-            <button
-              onClick={() => onSelectDemoProfile('surat')}
-              className={`w-full text-left px-3.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
-                profile.district === 'Surat'
-                  ? 'bg-slate-100 text-[#14532D] font-semibold'
-                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <span>Surat (Solar)</span>
-              {profile.district === 'Surat' && (
-                <div className="w-1.5 h-1.5 rounded-full bg-[#059669]" />
-              )}
-            </button>
-          </div>
+          {authUser ? (
+            <div className="px-3 space-y-2">
+              <div className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
+                Google Account
+              </div>
+              <div
+                data-testid="sidebar-google-account-card"
+                className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/80 space-y-2"
+              >
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#059669] shrink-0" />
+                  <span className="text-xs font-bold text-[#14532D] truncate">
+                    {profile.name || authUser.name || 'Verified Account'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 truncate font-medium">
+                  {authUser.email}
+                </p>
+                {onSignOut && (
+                  <button
+                    type="button"
+                    data-testid="sidebar-signout-btn"
+                    onClick={onSignOut}
+                    className="w-full py-1.5 px-2.5 rounded-lg bg-white hover:bg-red-50 border border-slate-200 hover:border-red-200 text-xs font-semibold text-slate-700 hover:text-red-700 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>Sign Out</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="px-3 pb-2 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
+                Sample Districts
+              </div>
+              <div className="space-y-1">
+                <button
+                  onClick={() => onSelectDemoProfile('gandhinagar')}
+                  className={`w-full text-left px-3.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
+                    profile.district === 'Gandhinagar'
+                      ? 'bg-slate-100 text-[#14532D] font-semibold'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  <span>Gandhinagar</span>
+                  {profile.district === 'Gandhinagar' && (
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#059669]" />
+                  )}
+                </button>
+                <button
+                  onClick={() => onSelectDemoProfile('ahmedabad')}
+                  className={`w-full text-left px-3.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
+                    profile.district === 'Ahmedabad'
+                      ? 'bg-slate-100 text-[#14532D] font-semibold'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  <span>Ahmedabad</span>
+                  {profile.district === 'Ahmedabad' && (
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#059669]" />
+                  )}
+                </button>
+                <button
+                  onClick={() => onSelectDemoProfile('surat')}
+                  className={`w-full text-left px-3.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
+                    profile.district === 'Surat'
+                      ? 'bg-slate-100 text-[#14532D] font-semibold'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  <span>Surat (Solar)</span>
+                  {profile.district === 'Surat' && (
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#059669]" />
+                  )}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </nav>
 
       {/* Bottom Sustainability Streak Widget & Docs Button */}
-      <div className="p-4 border-t border-slate-100 space-y-3">
+      <div className="p-4 border-t border-slate-100 space-y-2.5">
+        {!authUser && onOpenSignIn && (
+          <button
+            type="button"
+            data-testid="sidebar-google-signin-btn"
+            onClick={onOpenSignIn}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-white bg-[#14532D] hover:bg-emerald-900 transition-colors cursor-pointer"
+          >
+            <LogIn className="w-3.5 h-3.5 text-[#A3E635]" />
+            <span>Sign in with Google</span>
+          </button>
+        )}
+
         <div
           onClick={onOpenProfile}
           className="bg-slate-50 hover:bg-emerald-50/60 transition-colors p-3 rounded-xl border border-slate-200/80 cursor-pointer group"

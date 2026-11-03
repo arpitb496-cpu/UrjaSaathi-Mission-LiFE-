@@ -13,6 +13,7 @@ import {
   getDaysDifferenceIST,
   getIndiaDateString,
 } from '../utils/storage.ts';
+import type { HouseholdProfile } from '../utils/sustainabilityMath.ts';
 
 /**
  * Row schema for `public.mission_completions` in Supabase PostgreSQL.
@@ -65,6 +66,16 @@ export interface CredentialRecordRow {
   last_verified_at: string | null;
 }
 
+export interface UserHouseholdProfileRecord {
+  user_id: string;
+  email: string;
+  email_verified: boolean;
+  avatar_url: string | null;
+  profile: HouseholdProfile;
+  is_onboarded: boolean;
+  updated_at: string;
+}
+
 export interface PersistenceStatusReport {
   persistenceMode: 'supabase_postgres' | 'local_demo_fallback';
   supabaseConfigured: boolean;
@@ -77,6 +88,11 @@ export interface PersistenceStatusReport {
 export interface VerifiedUserIdentity {
   authenticated: boolean;
   userId: string;
+  email?: string;
+  emailVerified?: boolean;
+  fullName?: string;
+  avatarUrl?: string | null;
+  provider?: string;
   authMethod: 'supabase_jwt' | 'hmac_session_token' | 'server_issued_demo_session';
   sessionToken: string;
   bodyUserIdIgnored: boolean;
@@ -429,7 +445,9 @@ export function getSupabaseAdminClient(
  * Verifies user identity server-side.
  * CRITICAL SECURITY RULE: Never trusts arbitrary `user_id` or `userId` values supplied in request bodies or query strings.
  * - If an Authorization Bearer token or `x-urjasaathi-session` header is provided, it MUST pass cryptographic verification.
- * - If a tampered token is provided, returns `authenticated: false`.
+ * - Supabase JWTs are verified server-side using `supabase.auth.getUser(token)`.
+ * - User identity (`userId`, `email`, `fullName`, `avatarUrl`, `emailVerified`) is derived ONLY from the verified JWT.
+ * - If a tampered or expired token is provided, returns `authenticated: false`.
  * - Any `user_id` / `userId` in the request body that differs from the verified token identity is ignored and flagged (`bodyUserIdIgnored: true`).
  */
 export async function verifyServerUserIdentity(params: {
@@ -438,14 +456,46 @@ export async function verifyServerUserIdentity(params: {
   cookieHeader?: string;
   untrustedBodyUserId?: string;
   env?: NodeJS.ProcessEnv;
+  customJwtVerifier?: (token: string) => Promise<{
+    data: { user: any } | null;
+    error: { message: string } | null;
+  }>;
 }): Promise<VerifiedUserIdentity> {
   const env = params.env || process.env;
   const untrustedBodyId = (params.untrustedBodyUserId || '').trim();
 
+  // If an explicit Authorization header is sent, validate its Bearer format strictly
+  if (typeof params.authorizationHeader === 'string' && params.authorizationHeader.trim()) {
+    const trimmedAuth = params.authorizationHeader.trim();
+    if (!trimmedAuth.startsWith('Bearer ')) {
+      return {
+        authenticated: false,
+        userId: '',
+        authMethod: 'supabase_jwt',
+        sessionToken: '',
+        bodyUserIdIgnored: Boolean(untrustedBodyId),
+        error: 'Malformed Authorization header; expected Bearer <token>',
+      };
+    }
+    const bearerCandidate = trimmedAuth.slice('Bearer '.length).trim();
+    if (!bearerCandidate) {
+      return {
+        authenticated: false,
+        userId: '',
+        authMethod: 'supabase_jwt',
+        sessionToken: '',
+        bodyUserIdIgnored: Boolean(untrustedBodyId),
+        error: 'Empty Bearer token in Authorization header',
+      };
+    }
+  }
+
   // Extract token from Authorization: Bearer <token>, X-UrjaSaathi-Session header, or Cookie
   let rawToken = '';
-  if (params.authorizationHeader && params.authorizationHeader.startsWith('Bearer ')) {
-    rawToken = params.authorizationHeader.slice('Bearer '.length).trim();
+  let cameFromBearerHeader = false;
+  if (params.authorizationHeader && params.authorizationHeader.trim().startsWith('Bearer ')) {
+    rawToken = params.authorizationHeader.trim().slice('Bearer '.length).trim();
+    cameFromBearerHeader = true;
   } else if (params.sessionHeader && params.sessionHeader.trim()) {
     rawToken = params.sessionHeader.trim();
   } else if (params.cookieHeader) {
@@ -480,10 +530,40 @@ export async function verifyServerUserIdentity(params: {
       };
     }
 
-    // 1b. If Supabase is configured, verify Supabase Auth JWT server-side via supabase.auth.getUser()
+    // 1b. Pre-validate JWT structure and expiration (`exp` claim) before or alongside Supabase verification
+    const jwtParts = rawToken.split('.');
+    if (jwtParts.length === 3) {
+      try {
+        const payloadRaw = Buffer.from(jwtParts[1], 'base64url').toString('utf8');
+        const payload = JSON.parse(payloadRaw);
+        if (payload && typeof payload.exp === 'number' && payload.exp * 1000 <= Date.now()) {
+          return {
+            authenticated: false,
+            userId: '',
+            authMethod: 'supabase_jwt',
+            sessionToken: '',
+            bodyUserIdIgnored: Boolean(untrustedBodyId),
+            error: 'Supabase Auth JWT has expired',
+          };
+        }
+      } catch {
+        return {
+          authenticated: false,
+          userId: '',
+          authMethod: 'supabase_jwt',
+          sessionToken: '',
+          bodyUserIdIgnored: Boolean(untrustedBodyId),
+          error: 'Malformed JWT payload in Bearer token',
+        };
+      }
+    }
+
+    // 1c. Verify Supabase Auth JWT server-side via supabase.auth.getUser(token) (or customJwtVerifier in tests)
     const supabase = getSupabaseAdminClient(env);
-    if (supabase) {
-      const { data, error } = await supabase.auth.getUser(rawToken);
+    if (params.customJwtVerifier || supabase) {
+      const { data, error } = params.customJwtVerifier
+        ? await params.customJwtVerifier(rawToken)
+        : await supabase!.auth.getUser(rawToken);
       if (error || !data?.user?.id) {
         return {
           authenticated: false,
@@ -491,13 +571,42 @@ export async function verifyServerUserIdentity(params: {
           authMethod: 'supabase_jwt',
           sessionToken: '',
           bodyUserIdIgnored: Boolean(untrustedBodyId),
-          error: error?.message || 'Invalid Supabase Auth Bearer token',
+          error: error?.message || 'Invalid or tampered Supabase Auth Bearer token',
         };
       }
-      const verifiedId = data.user.id;
+      const verifiedUser = data.user;
+      const verifiedId = String(verifiedUser.id).trim();
+      const userMeta = (verifiedUser.user_metadata || {}) as Record<string, any>;
+      const appMeta = (verifiedUser.app_metadata || {}) as Record<string, any>;
+
+      const fullName =
+        typeof userMeta.full_name === 'string' && userMeta.full_name.trim()
+          ? userMeta.full_name.trim()
+          : typeof userMeta.name === 'string' && userMeta.name.trim()
+          ? userMeta.name.trim()
+          : '';
+
+      const avatarUrl =
+        typeof userMeta.avatar_url === 'string' && userMeta.avatar_url.trim()
+          ? userMeta.avatar_url.trim()
+          : typeof userMeta.picture === 'string' && userMeta.picture.trim()
+          ? userMeta.picture.trim()
+          : null;
+
+      const emailVerified = Boolean(
+        verifiedUser.email_confirmed_at ||
+          userMeta.email_verified === true ||
+          userMeta.verified === true
+      );
+
       return {
         authenticated: true,
         userId: verifiedId,
+        email: typeof verifiedUser.email === 'string' ? verifiedUser.email.trim() : '',
+        emailVerified,
+        fullName,
+        avatarUrl,
+        provider: typeof appMeta.provider === 'string' ? appMeta.provider : 'google',
         authMethod: 'supabase_jwt',
         sessionToken: rawToken,
         bodyUserIdIgnored: Boolean(untrustedBodyId && untrustedBodyId !== verifiedId),
@@ -508,7 +617,7 @@ export async function verifyServerUserIdentity(params: {
     return {
       authenticated: false,
       userId: '',
-      authMethod: 'hmac_session_token',
+      authMethod: cameFromBearerHeader ? 'supabase_jwt' : 'hmac_session_token',
       sessionToken: '',
       bodyUserIdIgnored: Boolean(untrustedBodyId),
       error: 'Unrecognized or tampered authentication token',
@@ -548,6 +657,8 @@ interface RelationalLedgerSchema {
   mission_completions: MissionCompletionRow[];
   user_progress: Record<string, UserProgressRow>;
   credential_records: Record<string, CredentialRecordRow>;
+  user_profiles: Record<string, UserHouseholdProfileRecord>;
+  user_chat_history: Record<string, any[]>;
 }
 
 function resolveDefaultLedgerFilePath(env: NodeJS.ProcessEnv = process.env): string {
@@ -662,6 +773,14 @@ export class DurablePersistenceEngine {
           parsed.credential_records && typeof parsed.credential_records === 'object'
             ? parsed.credential_records
             : {},
+        user_profiles:
+          parsed.user_profiles && typeof parsed.user_profiles === 'object'
+            ? parsed.user_profiles
+            : {},
+        user_chat_history:
+          parsed.user_chat_history && typeof parsed.user_chat_history === 'object'
+            ? parsed.user_chat_history
+            : {},
       };
     } catch {
       const initial = this.createSeededLedger();
@@ -721,6 +840,8 @@ export class DurablePersistenceEngine {
         },
       },
       credential_records: {},
+      user_profiles: {},
+      user_chat_history: {},
     };
   }
 
@@ -971,6 +1092,221 @@ export class DurablePersistenceEngine {
   }
 
   /**
+   * Retrieves or initializes a user's isolated household profile.
+   * - Never hardcodes names or districts.
+   * - Never copies anonymous/demo profile records into an authenticated user's profile.
+   */
+  public async getUserHouseholdProfile(
+    userId: string,
+    authMetadata?: {
+      name?: string;
+      email?: string;
+      emailVerified?: boolean;
+      avatarUrl?: string | null;
+    }
+  ): Promise<UserHouseholdProfileRecord> {
+    const cleanUserId = (userId || DEFAULT_USER_ID).trim() || DEFAULT_USER_ID;
+
+    // 1. Check local relational ledger first
+    const localRecord = await this.withDatabaseTransaction(
+      (db) => db.user_profiles[cleanUserId] || null
+    );
+    if (localRecord) {
+      // If Google auth provided a fresh verified email or avatar, keep it synced
+      if (authMetadata?.email || authMetadata?.avatarUrl) {
+        const nextEmail = authMetadata.email || localRecord.email;
+        const nextAvatar = authMetadata.avatarUrl ?? localRecord.avatar_url;
+        const nextName =
+          localRecord.profile.name && localRecord.profile.name.trim()
+            ? localRecord.profile.name
+            : (authMetadata.name || '').trim();
+        if (
+          nextEmail !== localRecord.email ||
+          nextAvatar !== localRecord.avatar_url ||
+          nextName !== localRecord.profile.name
+        ) {
+          return this.saveUserHouseholdProfile(cleanUserId, {
+            profile: { ...localRecord.profile, name: nextName },
+            isOnboarded: localRecord.is_onboarded,
+            email: nextEmail,
+            emailVerified: authMetadata.emailVerified ?? localRecord.email_verified,
+            avatarUrl: nextAvatar,
+          });
+        }
+      }
+      return localRecord;
+    }
+
+    // 2. If Supabase Admin is configured and userId is a UUID, check Supabase Auth user_metadata
+    const supabase = getSupabaseAdminClient(this.env);
+    if (supabase && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanUserId)) {
+      try {
+        const { data } = await supabase.auth.admin.getUserById(cleanUserId);
+        const user = data?.user;
+        if (user) {
+          const meta = (user.user_metadata || {}) as Record<string, any>;
+          const savedHousehold = meta.urjasaathi_household_profile as HouseholdProfile | undefined;
+          const googleName =
+            typeof meta.full_name === 'string' && meta.full_name.trim()
+              ? meta.full_name.trim()
+              : typeof meta.name === 'string' && meta.name.trim()
+              ? meta.name.trim()
+              : (authMetadata?.name || '').trim();
+
+          const hydratedProfile: HouseholdProfile = savedHousehold
+            ? {
+                ...DEFAULT_PROFILE,
+                ...savedHousehold,
+                name: (savedHousehold.name || googleName || '').trim(),
+                city: (savedHousehold.city || '').trim(),
+                district: (savedHousehold.district || '').trim(),
+              }
+            : {
+                ...DEFAULT_PROFILE,
+                name: googleName,
+                city: '',
+                district: '',
+              };
+
+          const hydratedRecord: UserHouseholdProfileRecord = {
+            user_id: cleanUserId,
+            email: user.email || authMetadata?.email || '',
+            email_verified: Boolean(
+              user.email_confirmed_at || meta.email_verified || authMetadata?.emailVerified
+            ),
+            avatar_url: meta.avatar_url || meta.picture || authMetadata?.avatarUrl || null,
+            profile: hydratedProfile,
+            is_onboarded: Boolean(meta.urjasaathi_onboarded && hydratedProfile.district),
+            updated_at: new Date().toISOString(),
+          };
+
+          await this.withDatabaseTransaction((db) => {
+            db.user_profiles[cleanUserId] = hydratedRecord;
+          });
+          return hydratedRecord;
+        }
+      } catch {
+        // Fallback to creating clean profile record below
+      }
+    }
+
+    // 3. Initialize a clean, un-onboarded profile record (never hardcodes names or districts)
+    const cleanInitialProfile: HouseholdProfile = {
+      ...DEFAULT_PROFILE,
+      name: (authMetadata?.name || '').trim(),
+      city: '',
+      district: '',
+    };
+
+    const newRecord: UserHouseholdProfileRecord = {
+      user_id: cleanUserId,
+      email: (authMetadata?.email || '').trim(),
+      email_verified: Boolean(authMetadata?.emailVerified),
+      avatar_url: authMetadata?.avatarUrl ?? null,
+      profile: cleanInitialProfile,
+      is_onboarded: false,
+      updated_at: new Date().toISOString(),
+    };
+
+    return this.withDatabaseTransaction((db) => {
+      db.user_profiles[cleanUserId] = newRecord;
+      return newRecord;
+    });
+  }
+
+  /**
+   * Saves a user's isolated household profile and onboarding status.
+   */
+  public async saveUserHouseholdProfile(
+    userId: string,
+    params: {
+      profile: Partial<HouseholdProfile>;
+      isOnboarded?: boolean;
+      email?: string;
+      emailVerified?: boolean;
+      avatarUrl?: string | null;
+    }
+  ): Promise<UserHouseholdProfileRecord> {
+    const cleanUserId = (userId || DEFAULT_USER_ID).trim() || DEFAULT_USER_ID;
+    const sanitizedProfile: HouseholdProfile = {
+      name: String(params.profile.name ?? '').trim(),
+      city: String(params.profile.city ?? '').trim(),
+      district: String(params.profile.district ?? '').trim(),
+      familyMembers: Math.max(1, Number(params.profile.familyMembers) || DEFAULT_PROFILE.familyMembers),
+      monthlyKwh: Math.max(0, Number(params.profile.monthlyKwh) || DEFAULT_PROFILE.monthlyKwh),
+      monthlyBillInr: Math.max(0, Number(params.profile.monthlyBillInr) || DEFAULT_PROFILE.monthlyBillInr),
+      appliances: Array.isArray(params.profile.appliances)
+        ? params.profile.appliances.map((a) => String(a))
+        : [...DEFAULT_PROFILE.appliances],
+      rooftopAvailableSqFt: Math.max(
+        0,
+        Number(params.profile.rooftopAvailableSqFt ?? DEFAULT_PROFILE.rooftopAvailableSqFt)
+      ),
+      hasSolarInstalled: Boolean(params.profile.hasSolarInstalled),
+    };
+
+    const isOnboarded =
+      typeof params.isOnboarded === 'boolean'
+        ? params.isOnboarded
+        : Boolean(sanitizedProfile.name && sanitizedProfile.district);
+
+    const saved = await this.withDatabaseTransaction((db) => {
+      const existing = db.user_profiles[cleanUserId];
+      const nextRecord: UserHouseholdProfileRecord = {
+        user_id: cleanUserId,
+        email: (params.email ?? existing?.email ?? '').trim(),
+        email_verified: params.emailVerified ?? existing?.email_verified ?? false,
+        avatar_url: params.avatarUrl !== undefined ? params.avatarUrl : existing?.avatar_url ?? null,
+        profile: sanitizedProfile,
+        is_onboarded: isOnboarded,
+        updated_at: new Date().toISOString(),
+      };
+      db.user_profiles[cleanUserId] = nextRecord;
+      return nextRecord;
+    });
+
+    // Also persist to Supabase Auth user_metadata when userId is a Supabase UUID
+    const supabase = getSupabaseAdminClient(this.env);
+    if (supabase && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanUserId)) {
+      try {
+        await supabase.auth.admin.updateUserById(cleanUserId, {
+          user_metadata: {
+            urjasaathi_household_profile: sanitizedProfile,
+            urjasaathi_onboarded: isOnboarded,
+          },
+        });
+      } catch {
+        // Non-fatal if test UUID does not exist in remote Supabase Auth users table
+      }
+    }
+
+    return saved;
+  }
+
+  /**
+   * Retrieves a user's isolated AI conversation history.
+   */
+  public async getUserChatHistory(userId: string): Promise<any[]> {
+    const cleanUserId = (userId || DEFAULT_USER_ID).trim() || DEFAULT_USER_ID;
+    return this.withDatabaseTransaction((db) => {
+      const list = db.user_chat_history[cleanUserId];
+      return Array.isArray(list) ? [...list] : [];
+    });
+  }
+
+  /**
+   * Saves a user's isolated AI conversation history.
+   */
+  public async saveUserChatHistory(userId: string, messages: any[]): Promise<any[]> {
+    const cleanUserId = (userId || DEFAULT_USER_ID).trim() || DEFAULT_USER_ID;
+    const bounded = Array.isArray(messages) ? messages.slice(-40) : [];
+    return this.withDatabaseTransaction((db) => {
+      db.user_chat_history[cleanUserId] = bounded;
+      return [...bounded];
+    });
+  }
+
+  /**
    * Retrieves the authoritative mission completion state for a user without incrementing streak on load.
    */
   public async getUserAuthoritativeState(userId: string, now: Date = new Date()): Promise<AppState> {
@@ -979,18 +1315,20 @@ export class DurablePersistenceEngine {
 
     const supabase = getSupabaseAdminClient(this.env);
     if (supabase) {
-      const [{ data: rows, error: rowsErr }, { data: progressRow, error: progErr }] = await Promise.all([
-        supabase
-          .from('mission_completions')
-          .select('*')
-          .eq('user_id', cleanUserId)
-          .order('completion_date', { ascending: true }),
-        supabase
-          .from('user_progress')
-          .select('*')
-          .eq('user_id', cleanUserId)
-          .maybeSingle(),
-      ]);
+      const [{ data: rows, error: rowsErr }, { data: progressRow, error: progErr }, profileRecord] =
+        await Promise.all([
+          supabase
+            .from('mission_completions')
+            .select('*')
+            .eq('user_id', cleanUserId)
+            .order('completion_date', { ascending: true }),
+          supabase
+            .from('user_progress')
+            .select('*')
+            .eq('user_id', cleanUserId)
+            .maybeSingle(),
+          this.getUserHouseholdProfile(cleanUserId),
+        ]);
 
       if (rowsErr) {
         throw new Error(`Failed to fetch mission_completions from Supabase: ${rowsErr.message}`);
@@ -1027,8 +1365,8 @@ export class DurablePersistenceEngine {
 
       return {
         userId: cleanUserId,
-        profile: DEFAULT_PROFILE,
-        isOnboarded: false,
+        profile: profileRecord?.profile || DEFAULT_PROFILE,
+        isOnboarded: Boolean(profileRecord?.is_onboarded),
         completedMissions,
         streakDays,
         lastActiveDate,
@@ -1078,10 +1416,12 @@ export class DurablePersistenceEngine {
       streakDays = 0;
     }
 
+    const storedProfile = db.user_profiles?.[userId];
+
     return {
       userId,
-      profile: DEFAULT_PROFILE,
-      isOnboarded: false,
+      profile: storedProfile?.profile ? { ...storedProfile.profile } : { ...DEFAULT_PROFILE },
+      isOnboarded: Boolean(storedProfile?.is_onboarded),
       completedMissions,
       streakDays,
       lastActiveDate: latestDate,
@@ -1251,6 +1591,10 @@ export class DurablePersistenceEngine {
       existingRow = await this.withDatabaseTransaction(
         (db) => db.credential_records[credentialId] || null
       );
+    }
+
+    if (existingRow && existingRow.user_id && existingRow.user_id !== userId) {
+      throw new Error('Forbidden: Cannot modify a Green Impact Passport owned by another user.');
     }
 
     const existingMeta = existingRow

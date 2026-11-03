@@ -12,8 +12,12 @@ import {
   CheckCircle2,
   ExternalLink,
   Leaf,
+  LogOut,
+  LogIn,
+  Settings,
 } from 'lucide-react';
 import { AppState, calculateUserAggregates } from '../utils/storage';
+import type { AuthenticatedUserProfile } from '../utils/supabaseAuth';
 
 interface TopNavbarProps {
   appState: AppState;
@@ -21,6 +25,9 @@ interface TopNavbarProps {
   setActiveTab: (tab: string) => void;
   onOpenOnboarding: () => void;
   onOpenDocs: () => void;
+  authUser?: AuthenticatedUserProfile | null;
+  onOpenSignIn?: () => void;
+  onSignOut?: () => void;
 }
 
 export const TopNavbar: React.FC<TopNavbarProps> = ({
@@ -29,12 +36,16 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   setActiveTab,
   onOpenOnboarding,
   onOpenDocs,
+  authUser,
+  onOpenSignIn,
+  onSignOut,
 }) => {
   const { profile } = appState;
   const aggregates = calculateUserAggregates(appState);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [notifications, setNotifications] = useState([
     {
       id: '1',
@@ -234,29 +245,128 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
           )}
         </div>
 
-        {/* Profile Card / Green Score Badge */}
-        <button
-          onClick={onOpenOnboarding}
-          className="flex items-center gap-2.5 pl-2 pr-3 py-1.5 rounded-xl hover:bg-slate-100 transition-colors border border-transparent hover:border-slate-200 text-left focus:outline-none"
-        >
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#14532D] to-[#059669] text-white flex items-center justify-center font-bold text-xs shadow-xs">
-            {profile.name ? profile.name.charAt(0).toUpperCase() : 'U'}
-          </div>
-          <div className="hidden sm:block">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-bold text-slate-800 leading-tight">
-                {profile.name || 'Citizen'}
-              </span>
-              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-100 text-[#14532D]">
-                {aggregates.effectiveGreenScore}
-              </span>
+        {/* Sign in with Google button when in Guest / Demo Mode */}
+        {!authUser && onOpenSignIn && (
+          <button
+            type="button"
+            data-testid="navbar-google-signin-btn"
+            onClick={onOpenSignIn}
+            className="px-3 py-1.5 rounded-xl bg-[#14532D] hover:bg-emerald-900 text-white text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer shrink-0"
+          >
+            <LogIn className="w-3.5 h-3.5 text-[#A3E635]" />
+            <span>Sign in with Google</span>
+          </button>
+        )}
+
+        {/* Profile Card / Authenticated Account Dropdown */}
+        <div className="relative">
+          <button
+            type="button"
+            data-testid="navbar-profile-btn"
+            onClick={() => {
+              if (authUser) {
+                setIsAccountMenuOpen(!isAccountMenuOpen);
+              } else {
+                onOpenOnboarding();
+              }
+            }}
+            className="flex items-center gap-2.5 pl-2 pr-3 py-1.5 rounded-xl hover:bg-slate-100 transition-colors border border-transparent hover:border-slate-200 text-left focus:outline-none cursor-pointer"
+          >
+            {authUser?.avatarUrl ? (
+              <img
+                src={authUser.avatarUrl}
+                alt={profile.name || authUser.name || 'User avatar'}
+                data-testid="navbar-user-avatar-img"
+                className="w-8 h-8 rounded-full object-cover border border-emerald-300 shadow-xs"
+              />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#14532D] to-[#059669] text-white flex items-center justify-center font-bold text-xs shadow-xs">
+                {(profile.name || authUser?.name || authUser?.email || 'U')
+                  .charAt(0)
+                  .toUpperCase()}
+              </div>
+            )}
+            <div className="hidden sm:block">
+              <div className="flex items-center gap-1.5">
+                <span
+                  data-testid="navbar-user-display-name"
+                  className="text-xs font-bold text-slate-800 leading-tight max-w-[140px] truncate"
+                >
+                  {profile.name || authUser?.name || 'Citizen'}
+                </span>
+                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-100 text-[#14532D] font-mono">
+                  {aggregates.effectiveGreenScore}
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-500 leading-tight max-w-[150px] truncate">
+                {authUser?.email ? authUser.email : aggregates.baselineMetrics.tier.name}
+              </p>
             </div>
-            <p className="text-[10px] text-slate-500 leading-tight">
-              {aggregates.baselineMetrics.tier.name}
-            </p>
-          </div>
-          <ChevronDown className="w-3.5 h-3.5 text-slate-400 hidden sm:block" />
-        </button>
+            <ChevronDown className="w-3.5 h-3.5 text-slate-400 hidden sm:block" />
+          </button>
+
+          {authUser && isAccountMenuOpen && (
+            <div
+              data-testid="navbar-account-dropdown"
+              className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200/90 p-3 z-50 space-y-2.5"
+            >
+              <div className="pb-2.5 border-b border-slate-100 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 truncate">
+                    {profile.name || authUser.name || 'Authenticated Citizen'}
+                  </span>
+                  {authUser.emailVerified && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                      <CheckCircle2 className="w-2.5 h-2.5 text-[#059669]" />
+                      Verified
+                    </span>
+                  )}
+                </div>
+                <p
+                  data-testid="navbar-user-email"
+                  className="text-[11px] text-slate-600 truncate font-medium"
+                >
+                  {authUser.email}
+                </p>
+                <p
+                  data-testid="navbar-user-uuid"
+                  className="text-[10px] font-mono text-slate-400 truncate"
+                >
+                  UUID: {authUser.id}
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAccountMenuOpen(false);
+                    onOpenOnboarding();
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-emerald-50 hover:text-[#14532D] flex items-center gap-2 transition-colors cursor-pointer"
+                >
+                  <Settings className="w-3.5 h-3.5 text-[#059669]" />
+                  <span>Edit Household Profile</span>
+                </button>
+
+                {onSignOut && (
+                  <button
+                    type="button"
+                    data-testid="navbar-signout-btn"
+                    onClick={() => {
+                      setIsAccountMenuOpen(false);
+                      onSignOut();
+                    }}
+                    className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-red-700 hover:bg-red-50 flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5 text-red-600" />
+                    <span>Sign Out of Google Account</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

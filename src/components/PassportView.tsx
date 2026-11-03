@@ -30,11 +30,13 @@ import {
 
 interface PassportViewProps {
   appState: AppState;
+  accessToken?: string | null;
   onOpenVerificationToken?: (token: string) => void;
 }
 
 export const PassportView: React.FC<PassportViewProps> = ({
   appState,
+  accessToken,
   onOpenVerificationToken,
 }) => {
   const [copied, setCopied] = useState<boolean>(false);
@@ -160,10 +162,15 @@ export const PassportView: React.FC<PassportViewProps> = ({
             ? '/api/passport/credentials/status'
             : '/api/passport/credentials/issue';
 
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (accessToken) {
+          headers['Authorization'] = `Bearer ${accessToken}`;
+        }
+
         const res = await fetch(endpoint, {
           method: 'POST',
           credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             holderName: profile.name || 'Household Citizen',
             district: profile.district || 'Gujarat',
@@ -218,6 +225,7 @@ export const PassportView: React.FC<PassportViewProps> = ({
       publicDisplayConsent,
       unlockedBadgeIdsKey,
       fallbackPassportId,
+      accessToken,
     ]
   );
 

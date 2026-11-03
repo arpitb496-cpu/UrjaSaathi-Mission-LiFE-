@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   ChevronRight,
@@ -39,6 +39,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (isOpen) {
+      setFormData({ ...currentProfile });
+      setStep(1);
+      setErrors({});
+    }
+  }, [isOpen, currentProfile]);
 
   if (!isOpen) return null;
 

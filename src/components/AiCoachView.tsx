@@ -31,6 +31,8 @@ import {
 import {
   AppState,
   getAdoptedMissionId,
+  getChatStorageKeyForUser,
+  getEffectiveUserId,
   isMissionCompletedToday,
   MissionCompletionResult,
 } from '../utils/storage';
@@ -38,6 +40,7 @@ import {
 interface AiCoachViewProps {
   profile: HouseholdProfile;
   appState?: AppState;
+  accessToken?: string | null;
   onAdoptMission?: (title: string, kwh: number, inr: number) => MissionCompletionResult | void;
 }
 
@@ -64,9 +67,12 @@ type ChatMessage = ChatMessageItem;
 export const AiCoachView: React.FC<AiCoachViewProps> = ({
   profile,
   appState,
+  accessToken,
   onAdoptMission,
 }) => {
   const [activeTab, setActiveTab] = useState<'chat' | 'recommendations' | 'plan'>('chat');
+  const effectiveUserId = getEffectiveUserId(appState);
+  const chatStorageKey = getChatStorageKeyForUser(effectiveUserId);
   const { userName: cleanName, district: cleanDistrict } = getCleanProfileContext(profile);
   const locationSuffix = cleanDistrict ? ` in ${cleanDistrict}` : '';
   const summaryHeading = cleanName
@@ -125,22 +131,109 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({
   const [actionPlan, setActionPlan] = useState<ActionPlanItem[]>([]);
   const [completedDays, setCompletedDays] = useState<Record<number, boolean>>({ 1: true });
 
-  // Chat state
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => [
-    {
-      id: 'init',
-      sender: 'ai',
-      text: buildCoachWelcomeMessage(profile),
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      mode: 'offline_mode',
-      modeLabel: 'Offline Mode',
-    },
-  ]);
+  // Chat state isolated per userId
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(chatStorageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
+        }
+      }
+    } catch {
+      // Fallback to initial welcome message
+    }
+    return [
+      {
+        id: 'init',
+        sender: 'ai',
+        text: buildCoachWelcomeMessage(profile),
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        mode: 'offline_mode',
+        modeLabel: 'Offline Mode',
+      },
+    ];
+  });
   const [chatInput, setChatInput] = useState<string>('');
   const [chatLoading, setChatLoading] = useState<boolean>(false);
 
   // Adopt feedback notification
   const [adoptedAlert, setAdoptedAlert] = useState<string | null>(null);
+
+  // Reload isolated chat history whenever the active userId changes
+  useEffect(() => {
+    let loadedFromCache = false;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(chatStorageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setChatMessages(parsed);
+            loadedFromCache = true;
+          }
+        }
+      }
+    } catch {
+      // Ignore cache read error
+    }
+
+    if (!loadedFromCache) {
+      setChatMessages([
+        {
+          id: 'init',
+          sender: 'ai',
+          text: buildCoachWelcomeMessage(profile),
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          mode: 'offline_mode',
+          modeLabel: 'Offline Mode',
+        },
+      ]);
+    }
+
+    const headers: Record<string, string> = {};
+    if (accessToken) {
+      headers['Authorization'] = `Bearer ${accessToken}`;
+    }
+    fetch('/api/user/chat-history', {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers,
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && Array.isArray(data.messages) && data.messages.length > 0) {
+          setChatMessages(data.messages);
+        }
+      })
+      .catch(() => {});
+  }, [effectiveUserId, chatStorageKey, accessToken]);
+
+  // Save isolated chat history per userId whenever messages change
+  useEffect(() => {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(chatStorageKey, JSON.stringify(chatMessages));
+      }
+    } catch {
+      // Ignore localStorage quota error
+    }
+    if (chatMessages.length > 1) {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (accessToken) {
+        headers['Authorization'] = `Bearer ${accessToken}`;
+      }
+      fetch('/api/user/chat-history', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers,
+        body: JSON.stringify({ messages: chatMessages }),
+      }).catch(() => {});
+    }
+  }, [chatMessages, chatStorageKey, accessToken]);
 
   // Sync welcome banner if user updates their name or district in profile settings
   useEffect(() => {

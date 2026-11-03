@@ -24,6 +24,7 @@ import {
 
 interface ImpactViewProps {
   appState: AppState;
+  accessToken?: string | null;
   initialSubTab?: 'achievements' | 'leaderboard' | 'districts' | 'passport';
   onOpenVerificationToken?: (token: string) => void;
 }
@@ -75,6 +76,7 @@ const GUJARAT_DISTRICT_BENCHMARKS = [
 
 export const ImpactView: React.FC<ImpactViewProps> = ({
   appState,
+  accessToken,
   initialSubTab = 'achievements',
   onOpenVerificationToken,
 }) => {
@@ -522,6 +524,7 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
       {activeTab === 'passport' && (
         <PassportView
           appState={appState}
+          accessToken={accessToken}
           onOpenVerificationToken={onOpenVerificationToken}
         />
       )}
