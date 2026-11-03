@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
@@ -11,7 +12,7 @@ import {
   buildMissionCompletionKey,
   getDaysDifferenceIST,
   getIndiaDateString,
-} from '../utils/storage.ts';
+} from '../utils/storage';
 
 /**
  * Row schema for `public.mission_completions` in Supabase PostgreSQL.
@@ -549,7 +550,13 @@ interface RelationalLedgerSchema {
   credential_records: Record<string, CredentialRecordRow>;
 }
 
-const DEFAULT_LEDGER_FILE = path.resolve(process.cwd(), '.data', 'urjasaathi_relational_ledger.json');
+function resolveDefaultLedgerFilePath(env: NodeJS.ProcessEnv = process.env): string {
+  // On Vercel / Serverless runtimes, /var/task is read-only; use os.tmpdir() (/tmp) when local fallback is used.
+  if (env.VERCEL || env.AWS_LAMBDA_FUNCTION_NAME) {
+    return path.join(os.tmpdir(), 'urjasaathi-data', 'urjasaathi_relational_ledger.json');
+  }
+  return path.resolve(process.cwd(), '.data', 'urjasaathi_relational_ledger.json');
+}
 
 /**
  * Durable Relational Ledger Engine that persists directly to disk (or Supabase PostgreSQL when configured).
@@ -564,9 +571,9 @@ export class DurablePersistenceEngine {
   private readonly env: NodeJS.ProcessEnv;
 
   constructor(options?: { ledgerFilePath?: string; env?: NodeJS.ProcessEnv }) {
-    this.ledgerFilePath = options?.ledgerFilePath || DEFAULT_LEDGER_FILE;
-    this.lockFilePath = `${this.ledgerFilePath}.lock`;
     this.env = options?.env || process.env;
+    this.ledgerFilePath = options?.ledgerFilePath || resolveDefaultLedgerFilePath(this.env);
+    this.lockFilePath = `${this.ledgerFilePath}.lock`;
   }
 
   public getStatus(): PersistenceStatusReport {

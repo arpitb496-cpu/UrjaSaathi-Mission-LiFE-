@@ -1,6 +1,6 @@
 import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from 'pdf-lib';
 import QRCode from 'qrcode';
-import { SolarCalculationResult } from './sustainabilityMath.ts';
+import { SolarCalculationResult } from './sustainabilityMath';
 
 export const PROTOTYPE_PASSPORT_DISCLAIMER =
   'This is a prototype digital sustainability credential created for the GEDA Mission LiFE Hackathon. It is not an officially issued GEDA or government certificate.';
@@ -124,6 +124,43 @@ export function formatIstDate(dateInput?: Date | string): string {
   }
 }
 
+function normalizeCandidateBaseUrl(raw?: string): string | null {
+  if (!raw) return null;
+  let trimmed = raw.trim().replace(/\/+$/, '');
+  if (!trimmed) return null;
+  if (
+    trimmed.includes('YOUR-DEPLOYED-DOMAIN') ||
+    trimmed.includes('example.com') ||
+    trimmed.includes('<') ||
+    trimmed.includes('>')
+  ) {
+    return null;
+  }
+
+  // If a domain was provided without protocol (e.g. "urjasaathi.vercel.app"), prefix https://
+  if (!trimmed.startsWith('https://') && !trimmed.startsWith('http://')) {
+    const isLocalHost =
+      trimmed.startsWith('localhost') ||
+      trimmed.startsWith('127.0.0.1') ||
+      trimmed.startsWith('0.0.0.0');
+    trimmed = `${isLocalHost ? 'http' : 'https'}://${trimmed}`;
+  }
+
+  // Upgrade non-local http:// URLs to https:// for production security
+  if (trimmed.startsWith('http://')) {
+    const hostPart = trimmed.slice('http://'.length);
+    const isLocalHost =
+      hostPart.startsWith('localhost') ||
+      hostPart.startsWith('127.0.0.1') ||
+      hostPart.startsWith('0.0.0.0');
+    if (!isLocalHost) {
+      trimmed = `https://${hostPart}`;
+    }
+  }
+
+  return trimmed;
+}
+
 /**
  * Resolves the canonical base URL for QR verification links.
  * Prioritizes APP_BASE_URL / deployed HTTPS domains and avoids encoding localhost in production.
@@ -135,10 +172,15 @@ export function resolveVerificationBaseUrl(options?: {
   browserOrigin?: string;
 }): string {
   const env = options?.env || (typeof process !== 'undefined' ? process.env : {});
+  const viteBaseUrl =
+    typeof import.meta !== 'undefined' && (import.meta as any).env
+      ? (import.meta as any).env.VITE_APP_BASE_URL
+      : undefined;
 
   const candidates = [
     env.APP_BASE_URL,
     env.VITE_APP_BASE_URL,
+    viteBaseUrl,
     env.PUBLIC_APP_URL,
     env.APP_URL,
     env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${env.VERCEL_PROJECT_PRODUCTION_URL}` : undefined,
@@ -146,14 +188,9 @@ export function resolveVerificationBaseUrl(options?: {
   ];
 
   for (const raw of candidates) {
-    if (!raw) continue;
-    const trimmed = raw.trim().replace(/\/+$/, '');
-    if (
-      (trimmed.startsWith('https://') || trimmed.startsWith('http://')) &&
-      !trimmed.includes('YOUR-DEPLOYED-DOMAIN') &&
-      !trimmed.includes('example.com')
-    ) {
-      return trimmed;
+    const normalized = normalizeCandidateBaseUrl(raw);
+    if (normalized) {
+      return normalized;
     }
   }
 
@@ -163,16 +200,16 @@ export function resolveVerificationBaseUrl(options?: {
       host.startsWith('localhost') ||
       host.startsWith('127.0.0.1') ||
       host.startsWith('0.0.0.0');
-    const proto = options.requestProtocol || (isLocal ? 'http' : 'https');
+    const proto = isLocal ? options.requestProtocol || 'http' : 'https';
     if (!isLocal) {
       return `${proto}://${host}`.replace(/\/+$/, '');
     }
   }
 
   if (options?.browserOrigin) {
-    const origin = options.browserOrigin.trim().replace(/\/+$/, '');
-    if (origin.startsWith('https://') || origin.startsWith('http://')) {
-      return origin;
+    const normalizedOrigin = normalizeCandidateBaseUrl(options.browserOrigin);
+    if (normalizedOrigin) {
+      return normalizedOrigin;
     }
   }
 

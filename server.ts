@@ -23,16 +23,18 @@ import {
   DurablePersistenceEngine,
   getPersistenceStatus,
   verifyServerUserIdentity,
-} from './src/db/supabasePersistence.ts';
+} from './src/db/supabasePersistence';
 import {
   generateSolarFeasibilityPdf,
   generateGreenPassportPdf,
+  generateImpactReportPdf,
   generateQrCodeDataUrl,
   resolveVerificationBaseUrl,
   PROTOTYPE_PASSPORT_DISCLAIMER,
   SOLAR_REPORT_FILENAME,
   PASSPORT_REPORT_FILENAME,
-} from './src/utils/pdfGenerator.ts';
+  IMPACT_REPORT_FILENAME,
+} from './src/utils/pdfGenerator';
 
 dotenv.config();
 
@@ -43,7 +45,22 @@ const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 
+// Trust reverse proxy headers (X-Forwarded-Proto, X-Forwarded-Host) on Vercel and production hosts
+app.set('trust proxy', 1);
+
 app.use(express.json());
+
+// Normalize serverless invocation paths if an upstream rewrite strips the /api prefix
+app.use((req: Request, _res: Response, next) => {
+  if (
+    !req.url.startsWith('/api/') &&
+    req.url !== '/api' &&
+    /^\/(health|gemini|missions|passport|reports|solar|auth|community)(\/|$|\?)/.test(req.url)
+  ) {
+    req.url = `/api${req.url}`;
+  }
+  next();
+});
 
 // Initialize server-side Gemini client
 const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
@@ -115,8 +132,16 @@ async function generateGeminiContentWithFallback(params: {
 }
 
 // Health check endpoint
-app.get('/api/health', (_req: Request, res: Response) => {
+app.get('/api/health', (req: Request, res: Response) => {
   const persistence = getPersistenceStatus();
+  const forwardedProto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim();
+  const forwardedHost = (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim();
+  const appBaseUrl = resolveVerificationBaseUrl({
+    env: process.env,
+    requestProtocol: forwardedProto || req.protocol || 'https',
+    requestHost: forwardedHost || req.get('host') || undefined,
+  });
+
   res.json({
     status: 'ok',
     appName: 'URJASAATHI',
@@ -129,6 +154,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
     durableStorageAvailable: persistence.durableStorageAvailable,
     persistenceNotice: persistence.persistenceNotice,
     persistenceWarning: persistence.persistenceWarning,
+    appBaseUrl,
     timestamp: new Date().toISOString(),
   });
 });
@@ -643,9 +669,10 @@ const persistenceEngine = new DurablePersistenceEngine();
 
 function setSessionCookie(res: Response, sessionToken: string) {
   if (!sessionToken) return;
+  const secureFlag = isProduction || Boolean(process.env.VERCEL) ? '; Secure' : '';
   res.setHeader(
     'Set-Cookie',
-    `urjasaathi_session=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`
+    `urjasaathi_session=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${secureFlag}`
   );
 }
 
@@ -1076,8 +1103,108 @@ app.post('/api/reports/passport-pdf', async (req: Request, res: Response) => {
   }
 });
 
-// Serve frontend with Vite in development or static files in production
-async function startServer() {
+// Server-side Household Energy & Impact Report PDF Download Endpoint (application/pdf)
+app.post('/api/reports/impact-pdf', async (req: Request, res: Response) => {
+  try {
+    const identity = await verifyServerUserIdentity({
+      authorizationHeader: req.headers.authorization,
+      sessionHeader: req.headers['x-urjasaathi-session'] as string | undefined,
+      cookieHeader: req.headers.cookie,
+      untrustedBodyUserId: req.body?.userId || req.body?.user_id,
+    });
+
+    setSessionCookie(res, identity.sessionToken);
+
+    const authoritativeState = await persistenceEngine.getUserAuthoritativeState(
+      identity.userId,
+      new Date()
+    );
+
+    const {
+      holderName,
+      district,
+      familyMembers,
+      monthlyKwh,
+      monthlyBillInr,
+      greenScore,
+      tierName,
+      completedMissions,
+      monthlyProgress,
+    } = req.body || {};
+
+    const cleanKwh = Math.max(10, Number(monthlyKwh) || authoritativeState.profile.monthlyKwh || 300);
+    const cleanBill = Math.max(
+      50,
+      Number(monthlyBillInr) || authoritativeState.profile.monthlyBillInr || Math.round(cleanKwh * 6.25)
+    );
+    const cleanFamily = Math.max(1, Number(familyMembers) || authoritativeState.profile.familyMembers || 4);
+    const cleanDistrict = (district || authoritativeState.profile.district || 'Ahmedabad').trim();
+    const cleanName = (holderName || authoritativeState.profile.name || 'Household Citizen').trim();
+
+    const metrics = calculateSustainabilityMetrics({
+      ...authoritativeState.profile,
+      name: cleanName,
+      district: cleanDistrict,
+      familyMembers: cleanFamily,
+      monthlyKwh: cleanKwh,
+      monthlyBillInr: cleanBill,
+    });
+
+    const recordedLogs = Object.values(authoritativeState.completedMissions || {});
+    const totalPoints = recordedLogs.reduce((acc, m) => acc + (Number(m.points) || 0), 0);
+    const totalCo2SavedKg = Number(
+      recordedLogs.reduce((acc, m) => acc + (Number(m.co2SavedKg) || 0), 0).toFixed(2)
+    );
+    const totalInrSaved = Math.round(
+      recordedLogs.reduce((acc, m) => acc + (Number(m.inrSaved) || 0), 0)
+    );
+
+    const missionEntries = Array.isArray(completedMissions)
+      ? completedMissions
+      : recordedLogs.map((log) => ({
+          missionId: log.missionId,
+          title: log.missionId,
+          completionDate: log.completionDate,
+          points: log.points,
+          co2SavedKg: log.co2SavedKg,
+          inrSaved: log.inrSaved,
+        }));
+
+    const pdfBytes = await generateImpactReportPdf({
+      holderName: cleanName,
+      district: cleanDistrict,
+      familyMembers: cleanFamily,
+      monthlyKwh: cleanKwh,
+      monthlyBillInr: cleanBill,
+      baselineMonthlyCarbonKg: metrics.monthlyCarbonKg,
+      potentialMonthlySavingKwh: metrics.potentialMonthlySavingKwh,
+      potentialMonthlySavingInr: metrics.potentialMonthlySavingInr,
+      greenScore: Number(greenScore) || metrics.greenScore,
+      tierName: (tierName || metrics.tier.name).trim(),
+      streakDays: authoritativeState.streakDays,
+      rewardPoints: totalPoints,
+      totalElectricityInrSaved: totalInrSaved,
+      totalCo2SavedKg,
+      completedMissionsCount: missionEntries.length,
+      completedMissions: missionEntries,
+      monthlyProgress: Array.isArray(monthlyProgress) ? monthlyProgress : undefined,
+      generatedAt: new Date(),
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${IMPACT_REPORT_FILENAME}"`
+    );
+    res.setHeader('Content-Length', String(pdfBytes.byteLength));
+    res.send(Buffer.from(pdfBytes));
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to generate Impact Report PDF' });
+  }
+});
+
+// Serve frontend with Vite in development or static files in standalone Node production
+export async function startServer() {
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -1086,17 +1213,37 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, 'dist')));
-    app.get('*', (_req: Request, res: Response) => {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    const distPath = path.join(__dirname, 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req: Request, res: Response, next) => {
+      if (req.path.startsWith('/api/')) {
+        next();
+        return;
+      }
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`URJASAATHI server running on http://0.0.0.0:${PORT} (env: ${process.env.NODE_ENV || 'development'})`);
+  return app.listen(PORT, '0.0.0.0', () => {
+    console.log(
+      `URJASAATHI server running on http://0.0.0.0:${PORT} (env: ${process.env.NODE_ENV || 'development'})`
+    );
   });
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-});
+// Start the standalone HTTP listener only when executed directly (never when imported as a Vercel Function or in unit tests)
+const isDirectExecution =
+  !process.env.VERCEL &&
+  process.env.NODE_ENV !== 'test' &&
+  Boolean(process.argv[1]) &&
+  path.resolve(process.argv[1]) === path.resolve(__filename);
+
+if (isDirectExecution) {
+  startServer().catch((err) => {
+    console.error('Failed to start server:', err);
+  });
+}
+
+export { app };
+export default app;
+
