@@ -4,15 +4,15 @@ import os from 'os';
 import path from 'path';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
-  AppState,
-  CompletedMissionLog,
+  type AppState,
+  type CompletedMissionLog,
   DEFAULT_PROFILE,
   DEFAULT_USER_ID,
-  MissionCompletionResult,
+  type MissionCompletionResult,
   buildMissionCompletionKey,
   getDaysDifferenceIST,
   getIndiaDateString,
-} from '../utils/storage';
+} from '../utils/storage.ts';
 
 /**
  * Row schema for `public.mission_completions` in Supabase PostgreSQL.

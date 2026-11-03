@@ -23,7 +23,7 @@
  * 3. Request-ID response association helper to prevent out-of-order or duplicate message bugs.
  */
 
-import { HouseholdProfile } from './sustainabilityMath';
+import type { HouseholdProfile } from './sustainabilityMath.ts';
 
 export const GUJARAT_AVG_TARIFF_INR_PER_KWH = 6.25;
 

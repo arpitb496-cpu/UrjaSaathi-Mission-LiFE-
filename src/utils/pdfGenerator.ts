@@ -1,6 +1,6 @@
 import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from 'pdf-lib';
 import QRCode from 'qrcode';
-import { SolarCalculationResult } from './sustainabilityMath';
+import type { SolarCalculationResult } from './sustainabilityMath.ts';
 
 export const PROTOTYPE_PASSPORT_DISCLAIMER =
   'This is a prototype digital sustainability credential created for the GEDA Mission LiFE Hackathon. It is not an officially issued GEDA or government certificate.';
@@ -124,9 +124,27 @@ export function formatIstDate(dateInput?: Date | string): string {
   }
 }
 
+function isLocalUrlOrHost(value: string): boolean {
+  const clean = value
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .toLowerCase();
+  return (
+    clean.startsWith('localhost') ||
+    clean.startsWith('127.0.0.1') ||
+    clean.startsWith('0.0.0.0')
+  );
+}
+
 function normalizeCandidateBaseUrl(raw?: string): string | null {
   if (!raw) return null;
-  let trimmed = raw.trim().replace(/\/+$/, '');
+  let trimmed = raw
+    .trim()
+    .replace(/^['"]+|['"]+$/g, '')
+    .replace(/^[A-Za-z_][A-Za-z0-9_]*=/, '')
+    .trim()
+    .replace(/^['"]+|['"]+$/g, '')
+    .replace(/\/+$/, '');
   if (!trimmed) return null;
   if (
     trimmed.includes('YOUR-DEPLOYED-DOMAIN') ||
@@ -139,21 +157,14 @@ function normalizeCandidateBaseUrl(raw?: string): string | null {
 
   // If a domain was provided without protocol (e.g. "urjasaathi.vercel.app"), prefix https://
   if (!trimmed.startsWith('https://') && !trimmed.startsWith('http://')) {
-    const isLocalHost =
-      trimmed.startsWith('localhost') ||
-      trimmed.startsWith('127.0.0.1') ||
-      trimmed.startsWith('0.0.0.0');
+    const isLocalHost = isLocalUrlOrHost(trimmed);
     trimmed = `${isLocalHost ? 'http' : 'https'}://${trimmed}`;
   }
 
   // Upgrade non-local http:// URLs to https:// for production security
   if (trimmed.startsWith('http://')) {
     const hostPart = trimmed.slice('http://'.length);
-    const isLocalHost =
-      hostPart.startsWith('localhost') ||
-      hostPart.startsWith('127.0.0.1') ||
-      hostPart.startsWith('0.0.0.0');
-    if (!isLocalHost) {
+    if (!isLocalUrlOrHost(hostPart)) {
       trimmed = `https://${hostPart}`;
     }
   }
@@ -187,23 +198,38 @@ export function resolveVerificationBaseUrl(options?: {
     env.VERCEL_URL ? `https://${env.VERCEL_URL}` : undefined,
   ];
 
+  let localEnvFallback: string | null = null;
+
   for (const raw of candidates) {
     const normalized = normalizeCandidateBaseUrl(raw);
     if (normalized) {
-      return normalized;
+      if (!isLocalUrlOrHost(normalized)) {
+        return normalized;
+      }
+      if (!localEnvFallback) {
+        localEnvFallback = normalized;
+      }
     }
   }
 
   if (options?.requestHost) {
     const host = options.requestHost.trim();
-    const isLocal =
-      host.startsWith('localhost') ||
-      host.startsWith('127.0.0.1') ||
-      host.startsWith('0.0.0.0');
+    const isLocal = isLocalUrlOrHost(host);
     const proto = isLocal ? options.requestProtocol || 'http' : 'https';
     if (!isLocal) {
       return `${proto}://${host}`.replace(/\/+$/, '');
     }
+  }
+
+  if (options?.browserOrigin) {
+    const normalizedOrigin = normalizeCandidateBaseUrl(options.browserOrigin);
+    if (normalizedOrigin && !isLocalUrlOrHost(normalizedOrigin)) {
+      return normalizedOrigin;
+    }
+  }
+
+  if (localEnvFallback) {
+    return localEnvFallback;
   }
 
   if (options?.browserOrigin) {

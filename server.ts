@@ -6,9 +6,9 @@ import { GoogleGenAI } from '@google/genai';
 import {
   calculateSolarFeasibility,
   calculateSustainabilityMetrics,
-  HouseholdProfile,
+  type HouseholdProfile,
   GUJARAT_DISTRICTS,
-} from './src/utils/sustainabilityMath';
+} from './src/utils/sustainabilityMath.ts';
 import {
   generateSmartFallbackResponse,
   calculateApplianceConsumption,
@@ -18,12 +18,12 @@ import {
   getCurrentDateInIndia,
   getCleanProfileContext,
   GUJARAT_AVG_TARIFF_INR_PER_KWH,
-} from './src/utils/energyMathChat';
+} from './src/utils/energyMathChat.ts';
 import {
   DurablePersistenceEngine,
   getPersistenceStatus,
   verifyServerUserIdentity,
-} from './src/db/supabasePersistence';
+} from './src/db/supabasePersistence.ts';
 import {
   generateSolarFeasibilityPdf,
   generateGreenPassportPdf,
@@ -34,7 +34,7 @@ import {
   SOLAR_REPORT_FILENAME,
   PASSPORT_REPORT_FILENAME,
   IMPACT_REPORT_FILENAME,
-} from './src/utils/pdfGenerator';
+} from './src/utils/pdfGenerator.ts';
 
 dotenv.config();
 

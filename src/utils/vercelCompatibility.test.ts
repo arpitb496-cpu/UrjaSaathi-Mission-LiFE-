@@ -4,10 +4,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import http from 'http';
-import vercelApp from '../../api/index';
-import serverApp from '../../server';
-import { resolveVerificationBaseUrl } from './pdfGenerator';
-import { DurablePersistenceEngine } from '../db/supabasePersistence';
+import vercelApp from '../../api/index.ts';
+import serverApp from '../../server.ts';
+import { resolveVerificationBaseUrl } from './pdfGenerator.ts';
+import { DurablePersistenceEngine } from '../db/supabasePersistence.ts';
 
 function startEphemeralServer(appInstance: any): Promise<{
   baseUrl: string;
@@ -50,6 +50,40 @@ test('Vercel Configuration: vercel.json and /api/index.ts entrypoint are properl
   // Verify Express app is exported identically from both server.ts and api/index.ts
   assert.equal(typeof vercelApp, 'function');
   assert.equal(vercelApp, serverApp);
+});
+
+test('Vercel ESM Module Resolution: api/index.ts and the complete server dependency graph use explicit .ts extensions on all relative imports', () => {
+  const serverGraphFiles = [
+    'api/index.ts',
+    'server.ts',
+    'src/db/supabasePersistence.ts',
+    'src/utils/pdfGenerator.ts',
+    'src/utils/energyMathChat.ts',
+    'src/utils/sustainabilityMath.ts',
+    'src/utils/storage.ts',
+    'src/data/missionsData.ts',
+  ];
+
+  // Verify api/index.ts explicitly imports '../server.ts'
+  const apiIndexSource = fs.readFileSync(path.resolve(process.cwd(), 'api/index.ts'), 'utf8');
+  assert.match(apiIndexSource, /from\s+['"]\.\.\/server\.ts['"]/);
+
+  // Verify every file in the server dependency graph has no extensionless relative imports
+  const relativeImportRegex = /(?:import|export)\s+(?:[\s\S]*?\s+from\s+)?['"](\.\.?\/[^'"]+)['"]/g;
+  for (const relPath of serverGraphFiles) {
+    const absPath = path.resolve(process.cwd(), relPath);
+    assert.equal(fs.existsSync(absPath), true, `${relPath} must exist`);
+    const content = fs.readFileSync(absPath, 'utf8');
+    let match: RegExpExecArray | null;
+    while ((match = relativeImportRegex.exec(content)) !== null) {
+      const specifier = match[1];
+      assert.match(
+        specifier,
+        /\.(ts|tsx|js|mjs|json)$/,
+        `Relative import "${specifier}" in ${relPath} must include an explicit file extension for Vercel ESM runtime`
+      );
+    }
+  }
 });
 
 test('Vercel Production Domain Resolution: APP_BASE_URL and VERCEL_PROJECT_PRODUCTION_URL enforce HTTPS', () => {

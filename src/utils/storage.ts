@@ -1,5 +1,5 @@
-import { HouseholdProfile, calculateSustainabilityMetrics } from './sustainabilityMath';
-import { Mission } from '../data/missionsData';
+import { type HouseholdProfile, calculateSustainabilityMetrics } from './sustainabilityMath.ts';
+import type { Mission } from '../data/missionsData.ts';
 
 /**
  * Persistence Architecture Notice:
