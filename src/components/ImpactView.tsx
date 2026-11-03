@@ -1,67 +1,99 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Award,
   Trophy,
-  Users,
   MapPin,
   ShieldCheck,
   CheckCircle2,
-  TreeDeciduous,
-  Zap,
-  TrendingDown,
-  DollarSign,
   Download,
-  Share2,
-  QrCode,
-  Sparkles,
   Flame,
-  Leaf,
-  Calendar,
   Lock,
-  Printer,
   Info,
+  RefreshCw,
+  ShieldAlert,
 } from 'lucide-react';
 import { AppState, calculateUserAggregates, hasEverCompletedMission } from '../utils/storage';
 import { MISSIONS_LIST } from '../data/missionsData';
+import { PassportView } from './PassportView';
+import {
+  generateImpactReportPdf,
+  triggerBrowserPdfDownload,
+  IMPACT_REPORT_FILENAME,
+  PROTOTYPE_PASSPORT_DISCLAIMER,
+} from '../utils/pdfGenerator';
 
 interface ImpactViewProps {
   appState: AppState;
   initialSubTab?: 'achievements' | 'leaderboard' | 'districts' | 'passport';
+  onOpenVerificationToken?: (token: string) => void;
 }
+
+const GUJARAT_DISTRICT_BENCHMARKS = [
+  {
+    district: 'Ahmedabad',
+    discom: 'Torrent Power / UGVCL',
+    solarInsolationPsh: '5.3 PSH/day',
+    ceaFactor: '0.675 kg CO₂/kWh',
+    maxSubsidyInr: '₹78,000 (3 kW+)',
+  },
+  {
+    district: 'Gandhinagar',
+    discom: 'UGVCL / Torrent Power',
+    solarInsolationPsh: '5.35 PSH/day',
+    ceaFactor: '0.675 kg CO₂/kWh',
+    maxSubsidyInr: '₹78,000 (3 kW+)',
+  },
+  {
+    district: 'Surat',
+    discom: 'DGVCL / Torrent Power',
+    solarInsolationPsh: '5.15 PSH/day',
+    ceaFactor: '0.675 kg CO₂/kWh',
+    maxSubsidyInr: '₹78,000 (3 kW+)',
+  },
+  {
+    district: 'Vadodara',
+    discom: 'MGVCL',
+    solarInsolationPsh: '5.2 PSH/day',
+    ceaFactor: '0.675 kg CO₂/kWh',
+    maxSubsidyInr: '₹78,000 (3 kW+)',
+  },
+  {
+    district: 'Rajkot',
+    discom: 'PGVCL',
+    solarInsolationPsh: '5.4 PSH/day',
+    ceaFactor: '0.675 kg CO₂/kWh',
+    maxSubsidyInr: '₹78,000 (3 kW+)',
+  },
+  {
+    district: 'Bhavnagar',
+    discom: 'PGVCL',
+    solarInsolationPsh: '5.35 PSH/day',
+    ceaFactor: '0.675 kg CO₂/kWh',
+    maxSubsidyInr: '₹78,000 (3 kW+)',
+  },
+];
 
 export const ImpactView: React.FC<ImpactViewProps> = ({
   appState,
   initialSubTab = 'achievements',
+  onOpenVerificationToken,
 }) => {
   const [activeTab, setActiveTab] = useState<'achievements' | 'leaderboard' | 'districts' | 'passport'>(
     initialSubTab
   );
-  const [communityData, setCommunityData] = useState<any>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [copied, setCopied] = useState<boolean>(false);
+  const [downloadingReport, setDownloadingReport] = useState<boolean>(false);
+  const [reportFeedback, setReportFeedback] = useState<string | null>(null);
 
   const aggregates = calculateUserAggregates(appState);
-  const { profile, streakDays } = appState;
-  const { baselineMetrics, effectiveGreenScore, totalMissions, totalCo2SavedKg, totalInrSaved } =
-    aggregates;
-
-  useEffect(() => {
-    fetch('/api/community/stats')
-      .then((res) => res.json())
-      .then((data) => {
-        setCommunityData(data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.warn('Could not fetch community data:', err);
-        setLoading(false);
-      });
-  }, []);
-
-  const passportId = `GEDA-LIFE-GJ-2026-${(
-    (profile.name.length * 7919 + profile.monthlyKwh * 13) %
-    90000 + 10000
-  )}`;
+  const { profile, streakDays, completedMissions } = appState;
+  const {
+    baselineMetrics,
+    effectiveGreenScore,
+    totalMissions,
+    totalPoints,
+    totalCo2SavedKg,
+    totalInrSaved,
+  } = aggregates;
 
   const BADGE_DEFINITIONS = [
     {
@@ -93,7 +125,7 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
       name: 'Surya Mitra (Solar Champion)',
       description: 'Evaluated rooftop solar feasibility or installed grid-tied solar.',
       icon: '☀️',
-      unlocked: profile.hasSolarInstalled || profile.rooftopAvailableSqFt >= 200,
+      unlocked: Boolean(profile.hasSolarInstalled || profile.rooftopAvailableSqFt >= 200),
       category: 'Solar',
     },
     {
@@ -131,29 +163,60 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
   ];
 
   const unlockedCount = BADGE_DEFINITIONS.filter((b) => b.unlocked).length;
+  const completedLogs = Object.values(completedMissions || {});
 
-  const topChampions = communityData?.topChampions || [
-    { rank: 1, name: 'Bhavik Patel', district: 'Gandhinagar', greenScore: 96, missionsCompleted: 48, solarUser: true, streakDays: 34 },
-    { rank: 2, name: 'Ananya Shah', district: 'Ahmedabad', greenScore: 94, missionsCompleted: 42, solarUser: true, streakDays: 28 },
-    { rank: 3, name: 'Dhaval Joshi', district: 'Vadodara', greenScore: 92, missionsCompleted: 39, solarUser: false, streakDays: 21 },
-    { rank: 4, name: 'Meera Trivedi', district: 'Rajkot', greenScore: 90, missionsCompleted: 36, solarUser: true, streakDays: 19 },
-    { rank: 5, name: 'Kinjal Mehta', district: 'Surat', greenScore: 89, missionsCompleted: 35, solarUser: false, streakDays: 16 },
-  ];
+  const handleDownloadImpactReport = async () => {
+    setDownloadingReport(true);
+    setReportFeedback(null);
+    try {
+      const completedMissionEntries = completedLogs.map((log) => {
+        const found = MISSIONS_LIST.find((m) => m.id === log.missionId);
+        return {
+          missionId: log.missionId,
+          title: found ? found.title : log.missionId,
+          completionDate: log.completionDate,
+          points: log.points,
+          co2SavedKg: log.co2SavedKg,
+          inrSaved: log.inrSaved,
+        };
+      });
 
-  const districtStats = communityData?.districtStats || [
-    { district: 'Ahmedabad', households: 48200, mwhSaved: 1420, co2ReducedTonnes: 1164, avgScore: 78 },
-    { district: 'Surat', households: 39500, mwhSaved: 1180, co2ReducedTonnes: 967, avgScore: 76 },
-    { district: 'Vadodara', households: 28400, mwhSaved: 890, co2ReducedTonnes: 729, avgScore: 75 },
-    { district: 'Gandhinagar', households: 18900, mwhSaved: 630, co2ReducedTonnes: 516, avgScore: 82 },
-    { district: 'Rajkot', households: 24100, mwhSaved: 760, co2ReducedTonnes: 623, avgScore: 74 },
-  ];
+      const pdfBytes = await generateImpactReportPdf({
+        holderName: profile.name || 'Household Citizen',
+        district: profile.district || 'Ahmedabad',
+        familyMembers: profile.familyMembers || 4,
+        monthlyKwh: profile.monthlyKwh,
+        monthlyBillInr: profile.monthlyBillInr,
+        baselineMonthlyCarbonKg: baselineMetrics.monthlyCarbonKg,
+        potentialMonthlySavingKwh: baselineMetrics.potentialMonthlySavingKwh,
+        potentialMonthlySavingInr: baselineMetrics.potentialMonthlySavingInr,
+        greenScore: effectiveGreenScore,
+        tierName: baselineMetrics.tier.name,
+        streakDays,
+        rewardPoints: totalPoints,
+        totalElectricityInrSaved: totalInrSaved,
+        totalCo2SavedKg,
+        completedMissionsCount: totalMissions,
+        completedMissions: completedMissionEntries,
+        monthlyProgress: [
+          {
+            month: 'Current Recorded Baseline',
+            actualKwh: profile.monthlyKwh,
+            targetKwh: (profile.familyMembers || 4) * 75,
+          },
+        ],
+        generatedAt: new Date(),
+      });
 
-  const handleCopyCredential = () => {
-    navigator.clipboard.writeText(
-      `URJASAATHI Mission LiFE Digital Credential: ID ${passportId} for ${profile.name} (${profile.district}). Green Score: ${effectiveGreenScore}/100.`
-    );
-    setCopied(true);
-    setTimeout(() => setCopied(false), 3000);
+      const downloadResult = triggerBrowserPdfDownload(pdfBytes, IMPACT_REPORT_FILENAME);
+      setReportFeedback(
+        `Downloaded ${downloadResult.filename} (${(downloadResult.sizeBytes / 1024).toFixed(1)} KB)`
+      );
+    } catch (err: any) {
+      setReportFeedback(err?.message || 'Could not generate Impact Report PDF.');
+    } finally {
+      setDownloadingReport(false);
+    }
   };
 
   return (
@@ -164,23 +227,45 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
           <div>
             <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800">
               <span className="w-2 h-2 rounded-full bg-[#059669]" />
-              <span>My Impact &amp; Community Recognition</span>
+              <span>My Impact &amp; Household Sustainability Ledger</span>
             </div>
             <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight font-heading mt-1">
               Sustainability Impact Hub
             </h1>
             <p className="text-xs sm:text-sm text-slate-600 mt-1">
-              Celebrating verified sustainability actions, district standings, and your Green Impact Passport.
+              Tracking your recorded household sustainability actions, regional benchmarks, and Green Impact Passport.
             </p>
           </div>
 
-          <div className="flex items-center gap-2 self-start sm:self-auto">
+          <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
             <span className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-900 border border-emerald-200/80 text-xs font-bold flex items-center gap-1.5">
               <Award className="w-3.5 h-3.5 text-[#059669]" />
               <span>{unlockedCount}/8 Badges Unlocked</span>
             </span>
+
+            <button
+              type="button"
+              data-testid="download-impact-report-btn"
+              onClick={handleDownloadImpactReport}
+              disabled={downloadingReport}
+              className="px-4 py-2 rounded-xl bg-[#14532D] hover:bg-emerald-900 disabled:opacity-60 text-white text-xs font-bold flex items-center gap-2 transition-all shadow-xs cursor-pointer"
+            >
+              {downloadingReport ? (
+                <RefreshCw className="w-3.5 h-3.5 text-[#A3E635] animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5 text-[#A3E635]" />
+              )}
+              <span>{downloadingReport ? 'Generating PDF...' : 'Download Impact Report'}</span>
+            </button>
           </div>
         </div>
+
+        {reportFeedback && (
+          <div className="mt-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-900 flex items-center justify-between">
+            <span>{reportFeedback}</span>
+            <span className="font-mono text-[11px]">application/pdf</span>
+          </div>
+        )}
 
         {/* Simplified Personal Impact Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-slate-100">
@@ -192,10 +277,10 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/60">
             <span className="text-[11px] font-semibold text-slate-500 uppercase">CO₂ Offset</span>
             <div className="text-xl font-black text-slate-900 mt-0.5">{totalCo2SavedKg} kg</div>
-            <span className="text-[10px] text-slate-500">~{baselineMetrics.treeOffsetEquivalent} Trees Eq.</span>
+            <span className="text-[10px] text-slate-500">Recorded from missions</span>
           </div>
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/60">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase">Money Saved</span>
+            <span className="text-[11px] font-semibold text-slate-500 uppercase">Estimated Bill Offset</span>
             <div className="text-xl font-black text-[#059669] mt-0.5">₹{totalInrSaved}</div>
             <span className="text-[10px] text-slate-500">Cumulative habits</span>
           </div>
@@ -207,6 +292,15 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
             </div>
             <span className="text-[10px] text-slate-500">Daily consistency</span>
           </div>
+        </div>
+      </div>
+
+      {/* Prototype Credential Disclaimer */}
+      <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 flex items-start gap-2.5">
+        <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+        <div>
+          <strong className="block text-amber-900 mb-0.5">Prototype Credential Disclosure:</strong>
+          <span>{PROTOTYPE_PASSPORT_DISCLAIMER}</span>
         </div>
       </div>
 
@@ -233,7 +327,7 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
           }`}
         >
           <Trophy className="w-4 h-4" />
-          <span>Community Leaderboard</span>
+          <span>Household Progress Ledger</span>
         </button>
 
         <button
@@ -245,7 +339,7 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
           }`}
         >
           <MapPin className="w-4 h-4" />
-          <span>District Rankings</span>
+          <span>District Solar Benchmarks</span>
         </button>
 
         <button
@@ -306,126 +400,81 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
         </div>
       )}
 
-      {/* 4. SUB-TAB 2: COMMUNITY LEADERBOARD */}
+      {/* 4. SUB-TAB 2: HOUSEHOLD PROGRESS LEDGER (Actual User Data Only - No Fabricated Profiles or Rankings) */}
       {activeTab === 'leaderboard' && (
         <div className="space-y-4">
-          <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 flex items-center gap-2">
-            <Info className="w-4 h-4 text-amber-700 shrink-0" />
+          <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-950 flex items-center gap-2">
+            <Info className="w-4 h-4 text-emerald-700 shrink-0" />
             <span>
-              <strong>Note on Leaderboard Data:</strong> Cohort entries below represent simulated benchmark community profiles to demonstrate Gujarat regional engagement for the Mission LiFE Hackathon. Your rank (#12) is computed against these benchmarks.
+              <strong>Data Integrity Policy:</strong> UrjaSaathi displays only your actual recorded household missions and calculated baseline. No fabricated user profiles, rankings, or simulated environmental savings are shown.
             </span>
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-bold text-slate-900">Gujarat Household Champions</h3>
-                <p className="text-xs text-slate-500">Live Mission LiFE rankings across all 33 districts</p>
+                <h3 className="text-sm font-bold text-slate-900">
+                  {profile.name || 'Active Household'} — Recorded Sustainability Standing
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {profile.district ? `${profile.district}, Gujarat` : 'Gujarat, India'} • {aggregates.totalPoints} LiFE Points Earned
+                </p>
               </div>
               <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
-                Your Rank: #12
+                {totalMissions} Completed Missions
               </span>
             </div>
 
             <div className="divide-y divide-slate-100">
-              {topChampions.map((champ: any, index: number) => (
-                <div
-                  key={index}
-                  className="p-4 flex items-center justify-between hover:bg-slate-50/60 transition-colors"
-                >
-                  <div className="flex items-center gap-3.5">
-                    <span
-                      className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black ${
-                        champ.rank === 1
-                          ? 'bg-amber-100 text-amber-800'
-                          : champ.rank === 2
-                          ? 'bg-slate-200 text-slate-700'
-                          : champ.rank === 3
-                          ? 'bg-amber-50 text-amber-900 border border-amber-200'
-                          : 'bg-slate-100 text-slate-500'
-                      }`}
+              {completedLogs.length > 0 ? (
+                completedLogs.map((log) => {
+                  const missionObj = MISSIONS_LIST.find((m) => m.id === log.missionId);
+                  return (
+                    <div
+                      key={log.completionKey}
+                      className="p-4 flex items-center justify-between hover:bg-slate-50/60 transition-colors"
                     >
-                      {champ.rank}
-                    </span>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 text-xs sm:text-sm">
-                          {champ.name}
+                      <div>
+                        <span className="font-bold text-slate-900 text-xs sm:text-sm block">
+                          {missionObj ? missionObj.title : log.missionId}
                         </span>
-                        {champ.solarUser && (
-                          <span className="text-[10px] font-semibold text-amber-800 bg-amber-100/70 px-1.5 py-0.2 rounded">
-                            Solar
-                          </span>
-                        )}
+                        <span className="text-[11px] text-slate-500">
+                          Completed on {log.completionDate} (Asia/Kolkata)
+                        </span>
                       </div>
-                      <span className="text-[11px] text-slate-500">{champ.district}, Gujarat</span>
-                    </div>
-                  </div>
-
-                  <div className="text-right flex items-center gap-4">
-                    <div className="hidden sm:block">
-                      <div className="text-xs font-bold text-slate-700">{champ.streakDays} Days</div>
-                      <span className="text-[10px] text-slate-400">Streak</span>
-                    </div>
-                    <div>
-                      <div className="text-xs sm:text-sm font-black text-[#14532D]">
-                        {champ.greenScore} / 100
+                      <div className="text-right">
+                        <div className="text-xs font-black text-[#14532D]">+{log.points} Points</div>
+                        <span className="text-[10px] text-emerald-700">
+                          {log.co2SavedKg} kg CO₂ • ₹{log.inrSaved} est. offset
+                        </span>
                       </div>
-                      <span className="text-[10px] text-slate-400">{champ.missionsCompleted} Missions</span>
                     </div>
-                  </div>
+                  );
+                })
+              ) : (
+                <div className="p-6 text-center text-xs text-slate-500">
+                  No missions recorded yet. Complete a daily mission to log your household impact.
                 </div>
-              ))}
-
-              {/* User Entry */}
-              <div className="p-4 bg-emerald-50/70 border-t-2 border-emerald-300 flex items-center justify-between">
-                <div className="flex items-center gap-3.5">
-                  <span className="w-7 h-7 rounded-full bg-[#14532D] text-white flex items-center justify-center text-xs font-black">
-                    12
-                  </span>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-900 text-xs sm:text-sm">
-                        {profile.name} (You)
-                      </span>
-                      <span className="text-[10px] font-bold text-emerald-800 bg-lime-200/80 px-1.5 py-0.2 rounded">
-                        Active User
-                      </span>
-                    </div>
-                    <span className="text-[11px] text-slate-600">{profile.district}, Gujarat</span>
-                  </div>
-                </div>
-
-                <div className="text-right flex items-center gap-4">
-                  <div className="hidden sm:block">
-                    <div className="text-xs font-bold text-slate-700">{streakDays} Days</div>
-                    <span className="text-[10px] text-slate-500">Streak</span>
-                  </div>
-                  <div>
-                    <div className="text-xs sm:text-sm font-black text-[#14532D]">
-                      {effectiveGreenScore} / 100
-                    </div>
-                    <span className="text-[10px] text-slate-500">{totalMissions} Missions</span>
-                  </div>
-                </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* 5. SUB-TAB 3: DISTRICT IMPACT */}
+      {/* 5. SUB-TAB 3: DISTRICT SOLAR & GRID REFERENCE BENCHMARKS */}
       {activeTab === 'districts' && (
         <div className="space-y-4">
           <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs">
-            <h3 className="text-sm font-bold text-slate-900">33-District Sustainability Engagement</h3>
+            <h3 className="text-sm font-bold text-slate-900">Gujarat District Solar &amp; Grid Reference Parameters</h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Cumulative clean energy adoption and Western Grid fossil offset under Mission LiFE.
+              Engineering reference parameters for regional solar irradiance, DISCOM coverage, and CEA Version 22.0 emission factors.
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-4">
-              {districtStats.map((d: any, idx: number) => {
-                const isUserDistrict = d.district.toLowerCase() === profile.district.toLowerCase();
+              {GUJARAT_DISTRICT_BENCHMARKS.map((d, idx) => {
+                const isUserDistrict =
+                  Boolean(profile.district) &&
+                  d.district.toLowerCase() === profile.district.toLowerCase();
                 return (
                   <div
                     key={idx}
@@ -438,23 +487,27 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
                     <div className="flex items-center justify-between">
                       <h4 className="font-bold text-slate-900 text-xs sm:text-sm">{d.district}</h4>
                       {isUserDistrict && (
-                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-200/70 px-1.5 py-0.2 rounded">
-                          Your District
+                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-200/70 px-1.5 py-0.5 rounded">
+                          Selected District
                         </span>
                       )}
                     </div>
-                    <div className="mt-2.5 grid grid-cols-3 gap-2 text-center pt-2 border-t border-slate-200/60 text-xs">
-                      <div>
-                        <div className="font-extrabold text-slate-800">{d.households.toLocaleString('en-IN')}</div>
-                        <div className="text-[10px] text-slate-500">Citizens</div>
+                    <div className="mt-2.5 space-y-1 pt-2 border-t border-slate-200/60 text-xs text-slate-600">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">DISCOM:</span>
+                        <strong className="text-slate-800">{d.discom}</strong>
                       </div>
-                      <div>
-                        <div className="font-extrabold text-[#059669]">{d.mwhSaved} MWh</div>
-                        <div className="text-[10px] text-slate-500">Saved</div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Insolation:</span>
+                        <strong className="text-[#059669]">{d.solarInsolationPsh}</strong>
                       </div>
-                      <div>
-                        <div className="font-extrabold text-[#14532D]">{d.avgScore}</div>
-                        <div className="text-[10px] text-slate-500">Avg Score</div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Grid Factor:</span>
+                        <strong className="text-[#14532D]">{d.ceaFactor}</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">CFA Subsidy Cap:</span>
+                        <strong className="text-slate-800">{d.maxSubsidyInr}</strong>
                       </div>
                     </div>
                   </div>
@@ -467,107 +520,10 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
 
       {/* 6. SUB-TAB 4: GREEN IMPACT PASSPORT */}
       {activeTab === 'passport' && (
-        <div className="space-y-4">
-          <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 flex items-center gap-2">
-            <Info className="w-4 h-4 text-amber-700 shrink-0" />
-            <span>
-              <strong>Prototype Digital Credential:</strong> This Green Impact Passport is a digital demonstration model designed for the GEDA Mission LiFE Hackathon. It is not an officially issued government certificate.
-            </span>
-          </div>
-
-          <div className="bg-white rounded-2xl border-2 border-emerald-300/80 p-6 sm:p-8 shadow-md relative overflow-hidden">
-            {/* Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-xl bg-[#14532D] text-white flex items-center justify-center">
-                  <ShieldCheck className="w-6 h-6 text-[#A3E635]" />
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-emerald-800 tracking-wider uppercase">
-                    Prototype Digital Sustainability Credential
-                  </div>
-                  <h2 className="text-xl font-black text-slate-900 font-heading">
-                    Green Impact Passport
-                  </h2>
-                </div>
-              </div>
-
-              <div className="text-left sm:text-right">
-                <span className="text-[10px] font-mono text-slate-400 block uppercase">Credential ID</span>
-                <span className="font-mono text-xs font-bold text-slate-800 bg-slate-100 px-2 py-1 rounded">
-                  {passportId}
-                </span>
-              </div>
-            </div>
-
-            {/* Passport Body */}
-            <div className="grid grid-cols-1 sm:grid-cols-12 gap-6 pt-6">
-              <div className="sm:col-span-8 space-y-4">
-                <div>
-                  <span className="text-xs font-semibold text-slate-400 uppercase">Citizen Name</span>
-                  <div className="text-lg font-bold text-slate-900">{profile.name}</div>
-                  <span className="text-xs text-slate-500">{profile.district}, Gujarat, India</span>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">Green Score</span>
-                    <div className="text-base font-black text-[#14532D]">{effectiveGreenScore} / 100</div>
-                    <span className="text-[10px] text-emerald-700 font-medium">{baselineMetrics.tier.name}</span>
-                  </div>
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">CO₂ Averted</span>
-                    <div className="text-base font-black text-slate-800">{totalCo2SavedKg} kg</div>
-                    <span className="text-[10px] text-slate-500">~{baselineMetrics.treeOffsetEquivalent} Trees</span>
-                  </div>
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">Bill Savings</span>
-                    <div className="text-base font-black text-[#059669]">₹{totalInrSaved}</div>
-                    <span className="text-[10px] text-slate-500">Cumulative</span>
-                  </div>
-                </div>
-
-                <p className="text-xs text-slate-500 leading-relaxed pt-2">
-                  This credential logs verified sustainable micro-actions under Mission LiFE standards, offsetting fossil-fuel generation drawn from the Western Regional Grid.
-                </p>
-              </div>
-
-              {/* QR & Verification */}
-              <div className="sm:col-span-4 flex flex-col items-center justify-center p-4 bg-slate-50 rounded-xl border border-slate-200/80 text-center">
-                <div className="w-24 h-24 bg-white p-2 rounded-lg border border-slate-200 shadow-2xs flex items-center justify-center">
-                  <QrCode className="w-20 h-20 text-slate-800" />
-                </div>
-                <span className="text-[10px] text-slate-400 mt-2 font-mono">GEDA-VERIFY-PASS</span>
-                <span className="text-[11px] font-semibold text-emerald-800 mt-0.5">
-                  Verified Active Household
-                </span>
-              </div>
-            </div>
-
-            {/* Passport Footer Actions */}
-            <div className="mt-6 pt-5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
-              <span className="text-[11px] text-slate-400">
-                Issued for GEDA Mission LiFE Hackathon Demonstration
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleCopyCredential}
-                  className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <Share2 className="w-3.5 h-3.5" />
-                  <span>{copied ? 'Copied Link!' : 'Share Credential'}</span>
-                </button>
-                <button
-                  onClick={() => window.print()}
-                  className="px-3.5 py-1.5 rounded-lg bg-[#14532D] hover:bg-[#0f4022] text-xs font-bold text-white flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Print Passport</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <PassportView
+          appState={appState}
+          onOpenVerificationToken={onOpenVerificationToken}
+        />
       )}
     </div>
   );

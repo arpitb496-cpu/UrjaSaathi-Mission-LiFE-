@@ -1,41 +1,77 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Award,
   ShieldCheck,
-  CheckCircle2,
-  TreeDeciduous,
-  Zap,
-  TrendingDown,
-  DollarSign,
+  ShieldAlert,
   Download,
   Share2,
-  QrCode,
   Sparkles,
-  Flame,
   Leaf,
-  Calendar,
   Lock,
+  ExternalLink,
+  RefreshCw,
+  CheckCircle2,
+  Eye,
+  EyeOff,
+  RotateCcw,
+  Ban,
 } from 'lucide-react';
 import { AppState, calculateUserAggregates, hasEverCompletedMission } from '../utils/storage';
 import { MISSIONS_LIST } from '../data/missionsData';
+import {
+  PROTOTYPE_PASSPORT_DISCLAIMER,
+  PASSPORT_REPORT_FILENAME,
+  generateGreenPassportPdf,
+  generateQrCodeDataUrl,
+  resolveVerificationBaseUrl,
+  triggerBrowserPdfDownload,
+  formatIstDate,
+  PassportBadgeItem,
+} from '../utils/pdfGenerator';
 
 interface PassportViewProps {
   appState: AppState;
+  onOpenVerificationToken?: (token: string) => void;
 }
 
-export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
+export const PassportView: React.FC<PassportViewProps> = ({
+  appState,
+  onOpenVerificationToken,
+}) => {
   const [copied, setCopied] = useState<boolean>(false);
+  const [publicDisplayConsent, setPublicDisplayConsent] = useState<boolean>(true);
   const [credentialRecord, setCredentialRecord] = useState<{
     credential_id: string;
     payload_hash: string;
     qr_verification_path: string;
     verified_count: number;
-    status: string;
+    status: 'active' | 'revoked';
+    issued_at: string;
   } | null>(null);
+  const [verificationToken, setVerificationToken] = useState<string>('');
+  const [verificationUrl, setVerificationUrl] = useState<string>('');
+  const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [persistenceInfo, setPersistenceInfo] = useState<{
+    persistenceMode: 'supabase_postgres' | 'local_demo_fallback';
+    durableStorageAvailable: boolean;
+  }>({
+    persistenceMode: appState.persistenceMode || 'local_demo_fallback',
+    durableStorageAvailable: Boolean(appState.durableStorageAvailable),
+  });
+
+  const [pdfDownloadState, setPdfDownloadState] = useState<{
+    downloading: boolean;
+    error: string | null;
+    successMessage: string | null;
+  }>({
+    downloading: false,
+    error: null,
+    successMessage: null,
+  });
+
   const [qrVerificationStatus, setQrVerificationStatus] = useState<{
     checking: boolean;
     verified?: boolean;
-    signatureValid?: boolean;
+    verificationState?: string;
     persistenceMode?: string;
     message?: string;
   }>({ checking: false });
@@ -45,66 +81,13 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
   const { baselineMetrics, effectiveGreenScore, totalMissions, totalCo2SavedKg, totalInrSaved } =
     aggregates;
 
-  const fallbackPassportId = `GEDA-LIFE-GJ-2026-${
+  const fallbackPassportId = `GEDA-LIFE-2026-${
     ((profile.name.length * 7919 + profile.monthlyKwh * 13) % 90000) + 10000
   }`;
   const passportId = credentialRecord?.credential_id || fallbackPassportId;
+  const issueDateStr = formatIstDate(credentialRecord?.issued_at || new Date());
 
-  React.useEffect(() => {
-    fetch('/api/passport/credentials/issue', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        holderName: profile.name || 'Verified Household Citizen',
-        district: profile.district || 'Gujarat',
-        greenScore: effectiveGreenScore,
-      }),
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.credential) {
-          setCredentialRecord(data.credential);
-        }
-      })
-      .catch(() => {});
-  }, [profile.name, profile.district, effectiveGreenScore, totalMissions]);
-
-  const handleVerifyQrCredential = async () => {
-    if (!credentialRecord?.credential_id) return;
-    setQrVerificationStatus({ checking: true });
-    try {
-      const res = await fetch(
-        `/api/passport/credentials/${encodeURIComponent(credentialRecord.credential_id)}/verify`,
-        { credentials: 'same-origin' }
-      );
-      const data = await res.json();
-      if (res.ok && data.verified) {
-        setCredentialRecord(data.credential);
-        setQrVerificationStatus({
-          checking: false,
-          verified: true,
-          signatureValid: data.signatureValid,
-          persistenceMode: data.persistenceMode,
-          message: `Verified against ${data.persistenceMode} (Hash: ${data.credential.payload_hash.slice(0, 12)}... · Checks: ${data.credential.verified_count})`,
-        });
-      } else {
-        setQrVerificationStatus({
-          checking: false,
-          verified: false,
-          message: data.error || data.reason || 'Verification failed',
-        });
-      }
-    } catch {
-      setQrVerificationStatus({
-        checking: false,
-        verified: false,
-        message: 'Could not reach verification endpoint',
-      });
-    }
-  };
-
-  const BADGE_DEFINITIONS = [
+  const BADGE_DEFINITIONS: Array<PassportBadgeItem & { icon: string }> = [
     {
       id: 'pioneer',
       name: 'Mission LiFE Pioneer',
@@ -155,71 +138,343 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
     },
   ];
 
+  const unlockedBadgeIds = BADGE_DEFINITIONS.filter((b) => b.unlocked).map((b) => b.id);
+  const unlockedBadgeIdsKey = unlockedBadgeIds.join(',');
+
+  const completedMissionTitles = Object.values(appState.completedMissions || {})
+    .map((log) => {
+      const found = MISSIONS_LIST.find((m) => m.id === log.missionId);
+      return found ? found.title : log.missionId;
+    })
+    .filter((v, i, arr) => Boolean(v) && arr.indexOf(v) === i);
+
+  const syncCredentialWithServer = useCallback(
+    async (opts?: {
+      consentOverride?: boolean;
+      rotateToken?: boolean;
+      statusOverride?: 'active' | 'revoked';
+    }) => {
+      try {
+        const endpoint =
+          opts?.statusOverride || opts?.rotateToken !== undefined || opts?.consentOverride !== undefined
+            ? '/api/passport/credentials/status'
+            : '/api/passport/credentials/issue';
+
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            holderName: profile.name || 'Household Citizen',
+            district: profile.district || 'Gujarat',
+            greenScore: effectiveGreenScore,
+            publicDisplayConsent:
+              opts?.consentOverride !== undefined ? opts.consentOverride : publicDisplayConsent,
+            unlockedBadgeIds,
+            rotateToken: Boolean(opts?.rotateToken),
+            status: opts?.statusOverride,
+          }),
+        });
+
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data?.credential) {
+          setCredentialRecord(data.credential);
+        }
+        if (typeof data?.publicDisplayConsent === 'boolean') {
+          setPublicDisplayConsent(data.publicDisplayConsent);
+        }
+        if (typeof data?.verificationToken === 'string' && data.verificationToken) {
+          setVerificationToken(data.verificationToken);
+        }
+        if (typeof data?.verificationUrl === 'string' && data.verificationUrl) {
+          setVerificationUrl(data.verificationUrl);
+        }
+        if (typeof data?.qrDataUrl === 'string' && data.qrDataUrl) {
+          setQrDataUrl(data.qrDataUrl);
+        }
+        if (data?.persistenceMode) {
+          setPersistenceInfo({
+            persistenceMode: data.persistenceMode,
+            durableStorageAvailable: Boolean(data.durableStorageAvailable),
+          });
+        }
+      } catch {
+        // Fallback client-side QR generation if offline
+        const base = resolveVerificationBaseUrl({
+          browserOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
+        });
+        const fallbackUrl = `${base}/verify/${encodeURIComponent(fallbackPassportId)}`;
+        setVerificationUrl(fallbackUrl);
+        generateQrCodeDataUrl(fallbackUrl)
+          .then((url) => setQrDataUrl(url))
+          .catch(() => {});
+      }
+    },
+    [
+      profile.name,
+      profile.district,
+      effectiveGreenScore,
+      publicDisplayConsent,
+      unlockedBadgeIdsKey,
+      fallbackPassportId,
+    ]
+  );
+
+  useEffect(() => {
+    syncCredentialWithServer();
+  }, [syncCredentialWithServer]);
+
+  const handleDownloadPassportPdf = async () => {
+    setPdfDownloadState({ downloading: true, error: null, successMessage: null });
+    try {
+      const effectiveUrl =
+        verificationUrl ||
+        `${resolveVerificationBaseUrl({
+          browserOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
+        })}/verify/${encodeURIComponent(verificationToken || passportId)}`;
+
+      const pdfBytes = await generateGreenPassportPdf({
+        holderName: profile.name || 'Household Citizen',
+        publicDisplayConsent,
+        passportId,
+        district: profile.district || 'Gujarat',
+        greenScore: effectiveGreenScore,
+        tierName: baselineMetrics.tier.name,
+        completedMissionsCount: totalMissions,
+        completedMissionTitles,
+        co2SavedKg: totalCo2SavedKg,
+        treeEquivalent: Math.max(1, Math.round(totalCo2SavedKg / 1.67)),
+        streakDays,
+        badges: BADGE_DEFINITIONS,
+        issueDate: credentialRecord?.issued_at || new Date(),
+        verificationUrl: effectiveUrl,
+        persistenceMode: persistenceInfo.persistenceMode,
+        durableStorageAvailable: persistenceInfo.durableStorageAvailable,
+        credentialStatus: credentialRecord?.status || 'active',
+      });
+
+      const downloadResult = triggerBrowserPdfDownload(pdfBytes, PASSPORT_REPORT_FILENAME);
+      setPdfDownloadState({
+        downloading: false,
+        error: null,
+        successMessage: `Downloaded ${downloadResult.filename} (${(
+          downloadResult.sizeBytes / 1024
+        ).toFixed(1)} KB)`,
+      });
+    } catch (err: any) {
+      setPdfDownloadState({
+        downloading: false,
+        error: err?.message || 'Failed to generate Green Impact Passport PDF.',
+        successMessage: null,
+      });
+    }
+  };
+
+  const handleVerifyQrCredential = async () => {
+    const tokenOrId = verificationToken || credentialRecord?.credential_id || passportId;
+    if (!tokenOrId) return;
+    setQrVerificationStatus({ checking: true });
+    try {
+      const res = await fetch(`/api/passport/verify/${encodeURIComponent(tokenOrId)}`, {
+        credentials: 'same-origin',
+      });
+      const data = await res.json();
+      if (res.ok && data.verified && data.publicCredential) {
+        setCredentialRecord((prev) =>
+          prev
+            ? {
+                ...prev,
+                verified_count: data.publicCredential.verifiedCount,
+                status: data.publicCredential.credentialStatus,
+              }
+            : prev
+        );
+        setQrVerificationStatus({
+          checking: false,
+          verified: true,
+          verificationState: data.verificationState,
+          persistenceMode: data.persistenceMode,
+          message: `Verified (${data.persistenceMode}) · SHA-256: ${data.publicCredential.tokenHashPrefix}... · Checks: ${data.publicCredential.verifiedCount}`,
+        });
+      } else {
+        setQrVerificationStatus({
+          checking: false,
+          verified: false,
+          verificationState: data.verificationState,
+          message: data.error || data.reason || 'Credential verification rejected',
+        });
+      }
+    } catch {
+      setQrVerificationStatus({
+        checking: false,
+        verified: false,
+        message: 'Could not reach verification endpoint',
+      });
+    }
+  };
+
+  const handleToggleConsent = async () => {
+    const nextConsent = !publicDisplayConsent;
+    setPublicDisplayConsent(nextConsent);
+    await syncCredentialWithServer({ consentOverride: nextConsent });
+  };
+
+  const handleToggleRevoke = async () => {
+    const nextStatus = credentialRecord?.status === 'revoked' ? 'active' : 'revoked';
+    await syncCredentialWithServer({ statusOverride: nextStatus });
+    setQrVerificationStatus({
+      checking: false,
+      verified: nextStatus === 'active',
+      message:
+        nextStatus === 'revoked'
+          ? 'Credential revoked. Public QR scans will now display REVOKED status.'
+          : 'Credential reactivated. Public QR scans will now verify as ACTIVE.',
+    });
+  };
+
+  const handleRotateToken = async () => {
+    await syncCredentialWithServer({ rotateToken: true, statusOverride: 'active' });
+    setQrVerificationStatus({
+      checking: false,
+      verified: true,
+      message: 'New cryptographic verification token generated and QR updated.',
+    });
+  };
+
+  const handleOpenPublicVerificationPage = () => {
+    const tokenTarget = verificationToken || passportId;
+    if (onOpenVerificationToken) {
+      onOpenVerificationToken(tokenTarget);
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      window.history.pushState({}, '', `/verify/${encodeURIComponent(tokenTarget)}`);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
+  };
+
   const handleShare = () => {
+    const shareTargetUrl = verificationUrl || window.location.href;
     if (navigator.share) {
       navigator
         .share({
           title: 'My URJASAATHI Green Impact Passport',
-          text: `I earned a Green Score of ${effectiveGreenScore}/100 and saved ${totalCo2SavedKg} kg CO2 in ${profile.district} on URJASAATHI (GEDA Mission LiFE)! Check your score today.`,
-          url: window.location.href,
+          text: `I earned a Green Score of ${effectiveGreenScore}/100 and saved ${totalCo2SavedKg} kg CO2 in ${profile.district} on URJASAATHI! Verify at: ${shareTargetUrl}`,
+          url: shareTargetUrl,
         })
         .catch(() => {});
     } else {
-      navigator.clipboard?.writeText(
-        `I have earned a Green Score of ${effectiveGreenScore}/100 and saved ${totalCo2SavedKg} kg CO2 in ${profile.district} on URJASAATHI (GEDA Mission LiFE)!`
-      );
+      navigator.clipboard?.writeText(shareTargetUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 3000);
     }
   };
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-6 pb-12" data-testid="passport-view">
       {/* Header Banner */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="space-y-2 max-w-xl">
           <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800">
             <span className="w-2 h-2 rounded-full bg-[#059669]" />
-            <span>Prototype Digital Credential · Hackathon Demonstration Model</span>
+            <span>
+              {persistenceInfo.durableStorageAvailable
+                ? 'Durable Server Credential · Supabase PostgreSQL Active'
+                : 'Demo Credential Mode · Local Storage Fallback'}
+            </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight font-heading">
             Green Impact Passport
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-            A prototype digital sustainability credential demonstrating how verified household micro-actions,
-            carbon offsets, and solar adoption can be celebrated under GEDA Mission LiFE.
+            Download your verifiable digital sustainability passport PDF or scan the cryptographic QR
+            code to inspect your public verification record.
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 self-start md:self-auto shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 self-start md:self-auto shrink-0">
           <button
-            onClick={() => window.print()}
-            className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200/80 border border-slate-200 text-xs font-bold text-slate-700 flex items-center gap-2 transition-colors shadow-xs"
+            type="button"
+            data-testid="download-passport-pdf-btn"
+            onClick={handleDownloadPassportPdf}
+            disabled={pdfDownloadState.downloading}
+            className="px-4 py-2.5 rounded-xl bg-[#14532D] hover:bg-emerald-900 disabled:opacity-60 text-xs font-bold text-white flex items-center gap-2 transition-all shadow-xs cursor-pointer"
           >
-            <Download className="w-4 h-4 text-[#059669]" />
-            <span>Print / Save PDF</span>
+            {pdfDownloadState.downloading ? (
+              <RefreshCw className="w-4 h-4 text-[#A3E635] animate-spin" />
+            ) : (
+              <Download className="w-4 h-4 text-[#A3E635]" />
+            )}
+            <span>
+              {pdfDownloadState.downloading
+                ? 'Generating Passport PDF...'
+                : 'Download Passport PDF'}
+            </span>
           </button>
+
           <button
-            onClick={handleShare}
-            className="px-4 py-2.5 rounded-xl bg-[#14532D] hover:bg-emerald-900 text-xs font-bold text-white flex items-center gap-2 transition-all shadow-xs"
+            type="button"
+            data-testid="open-public-verification-btn"
+            onClick={handleOpenPublicVerificationPage}
+            className="px-3.5 py-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-xs font-bold text-emerald-900 flex items-center gap-1.5 transition-colors cursor-pointer"
           >
-            <Share2 className="w-4 h-4 text-[#A3E635]" />
-            <span>{copied ? 'Copied Link!' : 'Share Passport'}</span>
+            <ExternalLink className="w-3.5 h-3.5 text-emerald-700" />
+            <span>Open Verification Page</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleShare}
+            className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200/80 border border-slate-200 text-xs font-bold text-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <Share2 className="w-3.5 h-3.5 text-[#059669]" />
+            <span>{copied ? 'Copied Verification URL!' : 'Copy Verification Link'}</span>
           </button>
         </div>
       </div>
 
-      {/* Explicit Prototype Notice */}
-      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center gap-2">
-        <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
-        <span>
-          <strong>Prototype Model Notice:</strong> This digital credential is an architectural demonstration model created for the GEDA Mission LiFE Hackathon. It is not an officially issued or legally stamped government certificate.
-        </span>
+      {/* PDF Download Status Feedback */}
+      {(pdfDownloadState.successMessage || pdfDownloadState.error) && (
+        <div
+          data-testid="passport-pdf-status"
+          className={`p-3.5 rounded-xl border text-xs font-semibold flex items-center justify-between ${
+            pdfDownloadState.error
+              ? 'bg-red-50 border-red-200 text-red-900'
+              : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{pdfDownloadState.error || pdfDownloadState.successMessage}</span>
+          </div>
+          <span className="font-mono text-[11px] opacity-80">application/pdf</span>
+        </div>
+      )}
+
+      {/* Mandatory Exact Prototype Disclosure */}
+      <div
+        data-testid="passport-prototype-disclaimer"
+        className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 flex items-start gap-2.5"
+      >
+        <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+        <div>
+          <strong className="block text-amber-900 mb-0.5">Prototype Credential Disclosure:</strong>
+          <span>{PROTOTYPE_PASSPORT_DISCLAIMER}</span>
+        </div>
       </div>
 
+      {/* Demo Storage Notice when persistent database is not configured */}
+      {!persistenceInfo.durableStorageAvailable && (
+        <div className="p-3 bg-slate-100 border border-slate-300 rounded-xl text-xs text-slate-800">
+          <strong>Demo Credential Status:</strong> Persistent cloud database storage is not active in
+          this session. This passport is clearly identified as a <strong>Demo Credential</strong>{' '}
+          until persistent production storage is configured.
+        </div>
+      )}
+
       {/* Main Passport Card */}
-      <div className="max-w-3xl mx-auto bg-gradient-to-br from-emerald-900 via-emerald-800 to-teal-900 text-white rounded-3xl p-6 sm:p-8 shadow-2xl border-2 border-emerald-500/40 relative overflow-hidden">
-        {/* Subtle Watermark emblem */}
+      <div className="max-w-4xl mx-auto bg-gradient-to-br from-emerald-900 via-emerald-800 to-teal-900 text-white rounded-3xl p-6 sm:p-8 shadow-2xl border-2 border-emerald-500/40 relative overflow-hidden">
         <div className="absolute right-4 bottom-4 opacity-5 pointer-events-none">
           <Leaf className="w-96 h-96 text-white" />
         </div>
@@ -233,27 +488,45 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
               </div>
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs uppercase tracking-widest text-lime-300 font-bold">
-                  GEDA Mission LiFE Concept
+                  URJASAATHI · GEDA Mission LiFE
                 </span>
-                <span className="text-[10px] bg-emerald-700 px-2 py-0.5 rounded text-emerald-100 font-semibold">
-                  Prototype Credential
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${
+                    credentialRecord?.status === 'revoked'
+                      ? 'bg-red-500/30 text-red-200 border border-red-400/40'
+                      : persistenceInfo.durableStorageAvailable
+                      ? 'bg-emerald-700 text-emerald-100'
+                      : 'bg-amber-400/25 text-amber-200 border border-amber-300/40'
+                  }`}
+                >
+                  {credentialRecord?.status === 'revoked'
+                    ? 'Revoked Credential'
+                    : qrVerificationStatus.verified
+                    ? 'Verified'
+                    : persistenceInfo.durableStorageAvailable
+                    ? 'Server-Persisted Credential'
+                    : 'Demo Credential'}
                 </span>
               </div>
-              <h2 className="text-xl sm:text-2xl font-bold font-heading tracking-wide">
-                PASSPORT TO SUSTAINABILITY
+              <h2 className="text-xl sm:text-2xl font-bold font-heading tracking-wide mt-0.5">
+                GREEN IMPACT PASSPORT
               </h2>
             </div>
           </div>
 
-          <div className="text-right sm:border-l sm:border-emerald-700/80 sm:pl-4">
+          <div className="text-left sm:text-right sm:border-l sm:border-emerald-700/80 sm:pl-4">
             <div className="text-[10px] uppercase tracking-wider text-emerald-300 font-mono">
-              Passport Identification
+              Unique Passport ID
             </div>
-            <div className="text-sm font-bold font-mono text-lime-300 tracking-wider">
+            <div
+              className="text-sm font-bold font-mono text-lime-300 tracking-wider"
+              data-testid="passport-unique-id"
+            >
               {passportId}
             </div>
+            <div className="text-[10px] text-emerald-200 mt-0.5">Issued: {issueDateStr}</div>
           </div>
         </div>
 
@@ -263,18 +536,26 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
             <div className="grid grid-cols-2 gap-4 text-xs">
               <div>
                 <p className="text-emerald-300 text-[10px] uppercase tracking-wider">
-                  Citizen / Household
+                  Passport Holder Name
                 </p>
-                <p className="font-bold text-white text-base mt-0.5 font-heading">
-                  {profile.name}
+                <p
+                  className="font-bold text-white text-base mt-0.5 font-heading"
+                  data-testid="passport-holder-name"
+                >
+                  {profile.name || 'Household Citizen'}
                 </p>
+                <span className="text-[10px] text-emerald-300">
+                  {publicDisplayConsent
+                    ? 'Publicly visible on QR verification'
+                    : 'Anonymized on public QR scan'}
+                </span>
               </div>
               <div>
                 <p className="text-emerald-300 text-[10px] uppercase tracking-wider">
-                  Jurisdiction & District
+                  Jurisdiction &amp; District
                 </p>
                 <p className="font-bold text-white text-base mt-0.5">
-                  {profile.district}, Gujarat
+                  {profile.district ? `${profile.district}, Gujarat` : 'Gujarat, India'}
                 </p>
               </div>
               <div>
@@ -282,7 +563,7 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
                   Household Cohort
                 </p>
                 <p className="font-semibold text-white mt-0.5">
-                  {profile.familyMembers} Residents • {profile.city}
+                  {profile.familyMembers} Residents{profile.city ? ` • ${profile.city}` : ''}
                 </p>
               </div>
               <div>
@@ -319,9 +600,7 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
             <div className="text-[10px] uppercase tracking-wider text-emerald-300 font-semibold">
               Missions Completed
             </div>
-            <div className="text-xl font-bold font-heading text-white mt-1">
-              {totalMissions}
-            </div>
+            <div className="text-xl font-bold font-heading text-white mt-1">{totalMissions}</div>
             <div className="text-[10px] text-emerald-400">{streakDays}d active streak</div>
           </div>
 
@@ -337,12 +616,10 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
 
           <div>
             <div className="text-[10px] uppercase tracking-wider text-emerald-300 font-semibold">
-              Direct Money Saved
+              Estimated Bill Offset
             </div>
-            <div className="text-xl font-bold font-heading text-white mt-1">
-              ₹{totalInrSaved}
-            </div>
-            <div className="text-[10px] text-emerald-400">Residential tariff offset</div>
+            <div className="text-xl font-bold font-heading text-white mt-1">₹{totalInrSaved}</div>
+            <div className="text-[10px] text-emerald-400">Private to holder only</div>
           </div>
 
           <div>
@@ -356,28 +633,89 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
           </div>
         </div>
 
-        {/* Passport Footer with QR Stamp & Live Verification */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-t border-emerald-700/60 pt-5 gap-4">
-          <div className="space-y-1">
+        {/* Passport Footer with Real Scannable QR Code & Verification Controls */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between border-t border-emerald-700/60 pt-6 gap-6">
+          <div className="space-y-2.5 flex-1 min-w-0">
             <p className="text-[10px] text-emerald-300 uppercase tracking-wider font-mono">
-              Validation Protocol · Persistent Credential Record
+              Cryptographic QR Verification · SHA-256 Token Hash Ledger
             </p>
-            <p className="text-xs text-emerald-100 font-medium">
-              Modeled under GEDA LiFE Hackathon Guidelines • CEA Unified National Grid Ver 22.0 Baseline
+            <p className="text-xs text-emerald-100 leading-relaxed">
+              Scan the QR code with any phone camera to open the public verification page. Private
+              household bills and phone numbers are never exposed on the public verification record.
             </p>
-            {credentialRecord ? (
-              <p className="text-[10px] text-emerald-300 font-mono">
-                HMAC-SHA256 Hash: {credentialRecord.payload_hash.slice(0, 16)}... • Endpoint:{' '}
-                {credentialRecord.qr_verification_path}
-              </p>
-            ) : (
-              <p className="text-[10px] text-emerald-400">
-                Prototype Evaluation Model • Demonstration Concept for Gujarat
-              </p>
+
+            {verificationUrl && (
+              <div className="p-2.5 rounded-xl bg-emerald-950/80 border border-emerald-700/70 text-[11px] font-mono text-lime-300 break-all">
+                <span className="text-emerald-400 select-none">Verification URL: </span>
+                <span data-testid="passport-verification-url">{verificationUrl}</span>
+              </div>
             )}
+
+            {/* Interactive Controls: Consent, Verify, Rotate, Revoke */}
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                data-testid="verify-qr-record-btn"
+                onClick={handleVerifyQrCredential}
+                disabled={qrVerificationStatus.checking}
+                className="px-3 py-1.5 rounded-lg bg-lime-400/20 hover:bg-lime-400/30 border border-lime-300/40 text-lime-200 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>{qrVerificationStatus.checking ? 'Verifying...' : 'Verify QR Record'}</span>
+              </button>
+
+              <button
+                type="button"
+                data-testid="toggle-public-consent-btn"
+                onClick={handleToggleConsent}
+                className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                {publicDisplayConsent ? (
+                  <>
+                    <Eye className="w-3.5 h-3.5 text-lime-300" />
+                    <span>Public Name: Shown</span>
+                  </>
+                ) : (
+                  <>
+                    <EyeOff className="w-3.5 h-3.5 text-amber-300" />
+                    <span>Public Name: Hidden</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                data-testid="rotate-qr-token-btn"
+                onClick={handleRotateToken}
+                className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-emerald-100 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Rotate Token</span>
+              </button>
+
+              <button
+                type="button"
+                data-testid="toggle-revoke-passport-btn"
+                onClick={handleToggleRevoke}
+                className={`px-3 py-1.5 rounded-lg border font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  credentialRecord?.status === 'revoked'
+                    ? 'bg-emerald-500/30 hover:bg-emerald-500/40 border-emerald-300/50 text-lime-200'
+                    : 'bg-red-500/20 hover:bg-red-500/30 border-red-400/40 text-red-200'
+                }`}
+              >
+                <Ban className="w-3.5 h-3.5" />
+                <span>
+                  {credentialRecord?.status === 'revoked'
+                    ? 'Restore Credential'
+                    : 'Revoke Credential'}
+                </span>
+              </button>
+            </div>
+
             {qrVerificationStatus.message && (
               <p
-                className={`text-[11px] font-semibold mt-1 ${
+                data-testid="qr-verification-feedback"
+                className={`text-xs font-semibold pt-1 ${
                   qrVerificationStatus.verified ? 'text-lime-300' : 'text-amber-300'
                 }`}
               >
@@ -387,23 +725,24 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
             )}
           </div>
 
-          <div className="flex items-center gap-3 bg-white/10 p-2.5 rounded-xl border border-white/20 self-start sm:self-auto shrink-0">
-            <QrCode className="w-10 h-10 text-white" />
-            <div className="text-[10px] font-mono text-emerald-200 space-y-1">
-              <span className="block font-bold text-white">QR CREDENTIAL RECORD</span>
-              {credentialRecord ? (
-                <button
-                  type="button"
-                  onClick={handleVerifyQrCredential}
-                  disabled={qrVerificationStatus.checking}
-                  className="px-2 py-0.5 rounded bg-lime-400/20 hover:bg-lime-400/30 border border-lime-300/40 text-lime-200 font-sans font-bold text-[10px] transition-colors"
-                >
-                  {qrVerificationStatus.checking ? 'Verifying...' : 'Verify QR Record'}
-                </button>
-              ) : (
-                <span>HACKATHON MODEL</span>
-              )}
-            </div>
+          {/* Genuine Generated QR Code Image */}
+          <div className="flex flex-col items-center bg-white text-slate-900 p-3.5 rounded-2xl shadow-lg border-2 border-lime-300/60 self-start md:self-auto shrink-0">
+            {qrDataUrl ? (
+              <img
+                src={qrDataUrl}
+                alt={`Verification QR Code for Passport ${passportId}`}
+                data-testid="passport-qr-image"
+                className="w-32 h-32 sm:w-36 sm:h-36 object-contain rounded-lg"
+              />
+            ) : (
+              <div className="w-32 h-32 sm:w-36 sm:h-36 flex items-center justify-center bg-slate-100 rounded-lg text-xs text-slate-500">
+                Generating QR...
+              </div>
+            )}
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#14532D] mt-2">
+              Scan to Verify
+            </span>
+            <span className="text-[9px] font-mono text-slate-500">{passportId}</span>
           </div>
         </div>
       </div>
@@ -414,10 +753,12 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
           <div>
             <h3 className="font-bold text-gray-900 font-heading text-base flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-emerald-600" />
-              Verified Sustainability Badges
+              {qrVerificationStatus.verified
+                ? 'Verified Sustainability Badges'
+                : 'Recorded Sustainability Badges'}
             </h3>
             <p className="text-xs text-gray-500">
-              Earn distinctive honor badges for completing Mission LiFE household milestones.
+              Included in your downloadable Passport PDF and public verification page.
             </p>
           </div>
           <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md">
@@ -451,15 +792,17 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
                     {badge.category}
                   </span>
                 </div>
-                <p className="text-[11px] text-gray-600 mt-1 leading-snug">
-                  {badge.description}
-                </p>
+                <p className="text-[11px] text-gray-600 mt-1 leading-snug">{badge.description}</p>
                 <span
                   className={`text-[10px] font-bold mt-2 inline-block ${
                     badge.unlocked ? 'text-emerald-700' : 'text-gray-400'
                   }`}
                 >
-                  {badge.unlocked ? '✓ Verified Unlocked' : '🔒 Locked'}
+                  {badge.unlocked
+                    ? qrVerificationStatus.verified
+                      ? '✓ Verified'
+                      : '✓ Unlocked'
+                    : '🔒 Locked'}
                 </span>
               </div>
             </div>

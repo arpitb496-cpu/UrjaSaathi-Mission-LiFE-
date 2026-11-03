@@ -146,7 +146,7 @@ export const MissionsView: React.FC<MissionsViewProps> = ({ appState, onToggleMi
         <div className="space-y-1.5 max-w-xl">
           <div className="flex items-center gap-2 text-xs font-semibold text-[#059669]">
             <span className="w-2 h-2 rounded-full bg-[#059669]" />
-            <span>GEDA Mission LiFE • Verified Household Actions</span>
+            <span>GEDA Mission LiFE • Daily Household Actions</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight font-heading">
             Daily Green Missions

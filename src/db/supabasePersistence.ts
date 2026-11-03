@@ -1110,16 +1110,101 @@ export class DurablePersistenceEngine {
   // ==========================================================================
 
   /**
+   * Generates a cryptographically random nonce (`crypto.randomBytes(16)`) and derives
+   * the holder's verification token (`uvt_<32hexNonce>_<24hexHmac>`). Only the SHA-256
+   * hash of the verification token (`th=<tokenHash>`) is persisted in the database.
+   */
+  public deriveVerificationTokenFromNonce(credentialId: string, nonce: string): string {
+    const cleanNonce = (nonce || '').trim();
+    const tag = crypto
+      .createHmac('sha256', getHmacSecret(this.env))
+      .update(`urja_vtok:${credentialId}:${cleanNonce}`)
+      .digest('hex')
+      .slice(0, 24);
+    return `uvt_${cleanNonce}_${tag}`;
+  }
+
+  public computeTokenSha256(rawToken: string): string {
+    return crypto
+      .createHash('sha256')
+      .update((rawToken || '').trim())
+      .digest('hex');
+  }
+
+  private encodeQrMetadataPath(params: {
+    credentialId: string;
+    tokenHash: string;
+    nonce: string;
+    publicDisplayConsent: boolean;
+    unlockedBadgeIds: string[];
+  }): string {
+    const search = new URLSearchParams();
+    search.set('th', params.tokenHash);
+    search.set('n', params.nonce);
+    search.set('c', params.publicDisplayConsent ? '1' : '0');
+    if (params.unlockedBadgeIds.length > 0) {
+      search.set('b', params.unlockedBadgeIds.join(','));
+    }
+    return `/api/passport/credentials/${encodeURIComponent(params.credentialId)}/verify?${search.toString()}`;
+  }
+
+  private decodeQrMetadataPath(qrPath: string): {
+    tokenHash: string | null;
+    nonce: string | null;
+    publicDisplayConsent: boolean;
+    unlockedBadgeIds: string[];
+  } {
+    const raw = (qrPath || '').trim();
+    const qIdx = raw.indexOf('?');
+    if (qIdx === -1) {
+      return {
+        tokenHash: null,
+        nonce: null,
+        publicDisplayConsent: true,
+        unlockedBadgeIds: ['pioneer'],
+      };
+    }
+    const search = new URLSearchParams(raw.slice(qIdx + 1));
+    const tokenHash = search.get('th');
+    const nonce = search.get('n');
+    const consentRaw = search.get('c');
+    const badgesRaw = search.get('b');
+    return {
+      tokenHash: tokenHash && tokenHash.trim() ? tokenHash.trim() : null,
+      nonce: nonce && nonce.trim() ? nonce.trim() : null,
+      publicDisplayConsent: consentRaw !== '0',
+      unlockedBadgeIds: badgesRaw
+        ? badgesRaw
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : ['pioneer'],
+    };
+  }
+
+  /**
    * Issues or updates a persistent Green Impact Passport credential record derived
    * from the authoritative server-side mission completion ledger.
+   * Keeps `payload_hash` as a pure 64-char HMAC-SHA256 hex digest and stores the
+   * 64-char SHA-256 `tokenHash` in `qr_verification_path` metadata (`th=<tokenHash>`).
    */
   public async upsertCredentialRecord(params: {
     verifiedUserId: string;
     holderName?: string;
     district?: string;
     greenScore?: number;
+    publicDisplayConsent?: boolean;
+    unlockedBadgeIds?: string[];
+    rotateToken?: boolean;
     now?: Date;
-  }): Promise<{ record: CredentialRecordRow; statusReport: PersistenceStatusReport }> {
+  }): Promise<{
+    record: CredentialRecordRow;
+    verificationToken: string;
+    tokenHash: string;
+    publicDisplayConsent: boolean;
+    unlockedBadgeIds: string[];
+    statusReport: PersistenceStatusReport;
+  }> {
     const now = params.now || new Date();
     const userId = (params.verifiedUserId || DEFAULT_USER_ID).trim() || DEFAULT_USER_ID;
     const authoritativeState = await this.getUserAuthoritativeState(userId, now);
@@ -1143,7 +1228,49 @@ export class DurablePersistenceEngine {
     const credentialId = `GEDA-LIFE-2026-${deterministicSuffix}`;
     const greenScore = Math.min(100, Math.max(0, Number(params.greenScore) || 74));
 
-    const payloadHash = computeCredentialPayloadHash(
+    const supabase = getSupabaseAdminClient(this.env);
+    let existingRow: CredentialRecordRow | null = null;
+
+    if (supabase) {
+      const { data } = await supabase
+        .from('credential_records')
+        .select('*')
+        .eq('credential_id', credentialId)
+        .maybeSingle();
+      if (data) {
+        existingRow = data as CredentialRecordRow;
+      }
+    } else {
+      existingRow = await this.withDatabaseTransaction(
+        (db) => db.credential_records[credentialId] || null
+      );
+    }
+
+    const existingMeta = existingRow
+      ? this.decodeQrMetadataPath(existingRow.qr_verification_path)
+      : null;
+
+    const nonce =
+      !params.rotateToken && existingMeta?.nonce && /^[0-9a-f]+$/i.test(existingMeta.nonce)
+        ? existingMeta.nonce
+        : crypto.randomBytes(16).toString('hex');
+
+    const publicDisplayConsent =
+      typeof params.publicDisplayConsent === 'boolean'
+        ? params.publicDisplayConsent
+        : existingMeta
+        ? existingMeta.publicDisplayConsent
+        : true;
+
+    const unlockedBadgeIds =
+      params.unlockedBadgeIds && params.unlockedBadgeIds.length > 0
+        ? params.unlockedBadgeIds
+        : existingMeta?.unlockedBadgeIds || ['pioneer'];
+
+    const verificationToken = this.deriveVerificationTokenFromNonce(credentialId, nonce);
+    const tokenHash = this.computeTokenSha256(verificationToken);
+
+    const payloadHmac = computeCredentialPayloadHash(
       {
         credential_id: credentialId,
         user_id: userId,
@@ -1156,28 +1283,37 @@ export class DurablePersistenceEngine {
       this.env
     );
 
-    const qrVerificationPath = `/api/passport/credentials/${encodeURIComponent(credentialId)}/verify`;
+    const qrVerificationPath = this.encodeQrMetadataPath({
+      credentialId,
+      tokenHash,
+      nonce,
+      publicDisplayConsent,
+      unlockedBadgeIds,
+    });
+
     const record: CredentialRecordRow = {
       credential_id: credentialId,
       user_id: userId,
-      holder_name: (params.holderName || '').trim() || 'Verified Household Citizen',
-      district: (params.district || '').trim() || 'Gujarat',
+      holder_name:
+        (params.holderName || '').trim() ||
+        existingRow?.holder_name ||
+        'Verified Household Citizen',
+      district: (params.district || '').trim() || existingRow?.district || 'Gujarat',
       green_score: greenScore,
       total_points: totalPoints,
       co2_saved_kg: co2SavedKg,
       inr_saved: inrSaved,
       missions_completed: missionsCompleted,
       streak_days: authoritativeState.streakDays,
-      payload_hash: payloadHash,
+      payload_hash: payloadHmac,
       qr_verification_path: qrVerificationPath,
-      status: 'active',
-      issued_at: now.toISOString(),
-      verified_count: 0,
-      last_verified_at: null,
+      status: existingRow?.status === 'revoked' && !params.rotateToken ? 'revoked' : 'active',
+      issued_at: existingRow?.issued_at || now.toISOString(),
+      verified_count: existingRow ? Number(existingRow.verified_count) || 0 : 0,
+      last_verified_at: existingRow ? existingRow.last_verified_at : null,
     };
 
     const statusReport = this.getStatus();
-    const supabase = getSupabaseAdminClient(this.env);
     if (supabase) {
       const { data, error } = await supabase
         .from('credential_records')
@@ -1187,19 +1323,315 @@ export class DurablePersistenceEngine {
       if (error) {
         throw new Error(`Supabase credential_records upsert failed: ${error.message}`);
       }
-      return { record: data as CredentialRecordRow, statusReport };
+      return {
+        record: data as CredentialRecordRow,
+        verificationToken,
+        tokenHash,
+        publicDisplayConsent,
+        unlockedBadgeIds,
+        statusReport,
+      };
     }
 
     return this.withDatabaseTransaction((db) => {
-      const existing = db.credential_records[credentialId];
-      const merged: CredentialRecordRow = {
-        ...record,
-        verified_count: existing ? existing.verified_count : 0,
-        last_verified_at: existing ? existing.last_verified_at : null,
+      db.credential_records[credentialId] = record;
+      return {
+        record: { ...record },
+        verificationToken,
+        tokenHash,
+        publicDisplayConsent,
+        unlockedBadgeIds,
+        statusReport,
       };
-      db.credential_records[credentialId] = merged;
-      return { record: merged, statusReport };
     });
+  }
+
+  /**
+   * Updates credential status (`active` | `revoked`), public display consent, or rotates the token.
+   */
+  public async updateCredentialLifecycle(params: {
+    verifiedUserId: string;
+    status?: 'active' | 'revoked';
+    publicDisplayConsent?: boolean;
+    rotateToken?: boolean;
+  }): Promise<{
+    record: CredentialRecordRow;
+    verificationToken: string;
+    tokenHash: string;
+    publicDisplayConsent: boolean;
+    unlockedBadgeIds: string[];
+    statusReport: PersistenceStatusReport;
+  }> {
+    const upserted = await this.upsertCredentialRecord({
+      verifiedUserId: params.verifiedUserId,
+      publicDisplayConsent: params.publicDisplayConsent,
+      rotateToken: params.rotateToken,
+    });
+
+    if (!params.status || params.status === upserted.record.status) {
+      return upserted;
+    }
+
+    const updatedRecord: CredentialRecordRow = {
+      ...upserted.record,
+      status: params.status,
+    };
+
+    const supabase = getSupabaseAdminClient(this.env);
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('credential_records')
+        .update({ status: params.status })
+        .eq('credential_id', updatedRecord.credential_id)
+        .select('*')
+        .single();
+      if (error) {
+        throw new Error(`Supabase credential status update failed: ${error.message}`);
+      }
+      return {
+        ...upserted,
+        record: data as CredentialRecordRow,
+      };
+    }
+
+    return this.withDatabaseTransaction((db) => {
+      db.credential_records[updatedRecord.credential_id] = updatedRecord;
+      return {
+        ...upserted,
+        record: { ...updatedRecord },
+      };
+    });
+  }
+
+  /**
+   * Verifies a Green Impact Passport credential by cryptographic verification token (`uvt_...`)
+   * or by `credential_id` (`GEDA-LIFE-...`), returning a privacy-filtered public verification report.
+   * Never exposes private electricity bills (`inr_saved`), phone numbers, or internal `user_id`.
+   */
+  public async verifyPublicPassportToken(rawTokenOrId: string): Promise<{
+    verified: boolean;
+    verificationState: 'verified' | 'revoked' | 'invalid_token' | 'unknown_token';
+    signatureValid: boolean;
+    statusReport: PersistenceStatusReport;
+    reason?: string;
+    publicCredential: {
+      passportId: string;
+      credentialStatus: 'active' | 'revoked';
+      holderDisplayName: string;
+      publicDisplayConsent: boolean;
+      district: string;
+      greenScore: number;
+      missionsCompleted: number;
+      co2SavedKg: number;
+      streakDays: number;
+      unlockedBadgeIds: string[];
+      issuedAt: string;
+      verifiedCount: number;
+      lastVerifiedAt: string | null;
+      tokenHashPrefix: string;
+      isDemoCredential: boolean;
+    } | null;
+  }> {
+    const candidate = (rawTokenOrId || '').trim();
+    const statusReport = this.getStatus();
+
+    // 1. Validate structural format
+    if (!candidate || candidate.length < 8 || candidate.length > 160 || /[^\w\-.:]/.test(candidate)) {
+      return {
+        verified: false,
+        verificationState: 'invalid_token',
+        signatureValid: false,
+        statusReport,
+        reason: 'Malformed or invalid passport verification token format.',
+        publicCredential: null,
+      };
+    }
+
+    const isTokenFormat = candidate.startsWith('uvt_');
+    const isPassportIdFormat = candidate.startsWith('GEDA-LIFE-');
+
+    if (!isTokenFormat && !isPassportIdFormat) {
+      return {
+        verified: false,
+        verificationState: 'invalid_token',
+        signatureValid: false,
+        statusReport,
+        reason: 'Invalid verification token prefix.',
+        publicCredential: null,
+      };
+    }
+
+    if (isTokenFormat) {
+      const parts = candidate.split('_');
+      if (parts.length !== 3 || parts[1].length < 8 || parts[2].length < 10) {
+        return {
+          verified: false,
+          verificationState: 'invalid_token',
+          signatureValid: false,
+          statusReport,
+          reason: 'Invalid cryptographic token structure.',
+          publicCredential: null,
+        };
+      }
+    }
+
+    const candidateTokenHash = isTokenFormat ? this.computeTokenSha256(candidate) : null;
+    const supabase = getSupabaseAdminClient(this.env);
+    let matchedRow: CredentialRecordRow | null = null;
+
+    if (supabase) {
+      if (isTokenFormat && candidateTokenHash) {
+        const { data } = await supabase
+          .from('credential_records')
+          .select('*')
+          .like('qr_verification_path', `%th=${candidateTokenHash}%`)
+          .maybeSingle();
+        if (data) {
+          matchedRow = data as CredentialRecordRow;
+        }
+      } else if (isPassportIdFormat) {
+        const { data } = await supabase
+          .from('credential_records')
+          .select('*')
+          .eq('credential_id', candidate)
+          .maybeSingle();
+        if (data) {
+          matchedRow = data as CredentialRecordRow;
+        }
+      }
+    } else {
+      matchedRow = await this.withDatabaseTransaction((db) => {
+        if (isTokenFormat && candidateTokenHash) {
+          return (
+            Object.values(db.credential_records).find((r) =>
+              r.qr_verification_path.includes(`th=${candidateTokenHash}`)
+            ) || null
+          );
+        }
+        if (isPassportIdFormat) {
+          return db.credential_records[candidate] || null;
+        }
+        return null;
+      });
+    }
+
+    if (!matchedRow) {
+      return {
+        verified: false,
+        verificationState: 'unknown_token',
+        signatureValid: false,
+        statusReport,
+        reason: isTokenFormat
+          ? 'Unknown or expired passport verification token.'
+          : 'Unknown Passport ID.',
+        publicCredential: null,
+      };
+    }
+
+    const meta = this.decodeQrMetadataPath(matchedRow.qr_verification_path);
+    const storedTokenHash = meta.tokenHash;
+
+    const expectedPayloadHmac = computeCredentialPayloadHash(
+      {
+        credential_id: matchedRow.credential_id,
+        user_id: matchedRow.user_id,
+        green_score: Number(matchedRow.green_score),
+        total_points: Number(matchedRow.total_points),
+        co2_saved_kg: Number(matchedRow.co2_saved_kg),
+        inr_saved: Number(matchedRow.inr_saved),
+        missions_completed: Number(matchedRow.missions_completed),
+      },
+      this.env
+    );
+
+    const tokenMatches =
+      !isTokenFormat || (storedTokenHash !== null && storedTokenHash === candidateTokenHash);
+    const hmacMatches = matchedRow.payload_hash === expectedPayloadHmac;
+    const signatureValid = Boolean(tokenMatches && hmacMatches);
+
+    const holderDisplayName = meta.publicDisplayConsent
+      ? matchedRow.holder_name
+      : 'Verified Household Citizen (Public Name Withheld)';
+
+    if (matchedRow.status === 'revoked') {
+      return {
+        verified: false,
+        verificationState: 'revoked',
+        signatureValid: false,
+        statusReport,
+        reason: 'This Green Impact Passport credential has been revoked and is no longer active.',
+        publicCredential: {
+          passportId: matchedRow.credential_id,
+          credentialStatus: 'revoked',
+          holderDisplayName,
+          publicDisplayConsent: meta.publicDisplayConsent,
+          district: matchedRow.district,
+          greenScore: Number(matchedRow.green_score),
+          missionsCompleted: Number(matchedRow.missions_completed),
+          co2SavedKg: Number(matchedRow.co2_saved_kg),
+          streakDays: Number(matchedRow.streak_days),
+          unlockedBadgeIds: meta.unlockedBadgeIds,
+          issuedAt: matchedRow.issued_at,
+          verifiedCount: Number(matchedRow.verified_count) || 0,
+          lastVerifiedAt: matchedRow.last_verified_at,
+          tokenHashPrefix: (storedTokenHash || matchedRow.payload_hash).slice(0, 16),
+          isDemoCredential: !statusReport.durableStorageAvailable,
+        },
+      };
+    }
+
+    if (!signatureValid) {
+      return {
+        verified: false,
+        verificationState: 'invalid_token',
+        signatureValid: false,
+        statusReport,
+        reason: 'Cryptographic payload hash mismatch.',
+        publicCredential: null,
+      };
+    }
+
+    // Increment verification counter for valid active credential
+    const nextCount = (Number(matchedRow.verified_count) || 0) + 1;
+    const verifiedAt = new Date().toISOString();
+
+    if (supabase) {
+      await supabase
+        .from('credential_records')
+        .update({ verified_count: nextCount, last_verified_at: verifiedAt })
+        .eq('credential_id', matchedRow.credential_id);
+    } else {
+      await this.withDatabaseTransaction((db) => {
+        if (db.credential_records[matchedRow!.credential_id]) {
+          db.credential_records[matchedRow!.credential_id].verified_count = nextCount;
+          db.credential_records[matchedRow!.credential_id].last_verified_at = verifiedAt;
+        }
+      });
+    }
+
+    return {
+      verified: true,
+      verificationState: 'verified',
+      signatureValid: true,
+      statusReport,
+      publicCredential: {
+        passportId: matchedRow.credential_id,
+        credentialStatus: 'active',
+        holderDisplayName,
+        publicDisplayConsent: meta.publicDisplayConsent,
+        district: matchedRow.district,
+        greenScore: Number(matchedRow.green_score),
+        missionsCompleted: Number(matchedRow.missions_completed),
+        co2SavedKg: Number(matchedRow.co2_saved_kg),
+        streakDays: Number(matchedRow.streak_days),
+        unlockedBadgeIds: meta.unlockedBadgeIds,
+        issuedAt: matchedRow.issued_at,
+        verifiedCount: nextCount,
+        lastVerifiedAt: verifiedAt,
+        tokenHashPrefix: (storedTokenHash || matchedRow.payload_hash).slice(0, 16),
+        isDemoCredential: !statusReport.durableStorageAvailable,
+      },
+    };
   }
 
   /**

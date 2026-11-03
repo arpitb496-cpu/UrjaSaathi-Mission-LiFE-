@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Sun,
   Zap,
@@ -15,6 +15,8 @@ import {
   Info,
   Maximize2,
   Sliders,
+  Download,
+  RefreshCw,
 } from 'lucide-react';
 import {
   BarChart,
@@ -32,12 +34,21 @@ import {
   GUJARAT_DISTRICTS,
   HouseholdProfile,
 } from '../utils/sustainabilityMath';
+import {
+  generateSolarFeasibilityPdf,
+  triggerBrowserPdfDownload,
+  SOLAR_REPORT_FILENAME,
+  formatIstDate,
+} from '../utils/pdfGenerator';
 
 interface SolarCalculatorViewProps {
   initialProfile: HouseholdProfile;
 }
 
 export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initialProfile }) => {
+  const [applicantName, setApplicantName] = useState<string>(
+    initialProfile.name || 'Household Applicant'
+  );
   const [monthlyKwh, setMonthlyKwh] = useState<number>(initialProfile.monthlyKwh || 300);
   const [rooftopArea, setRooftopArea] = useState<number>(
     initialProfile.rooftopAvailableSqFt > 0 ? initialProfile.rooftopAvailableSqFt : 350
@@ -48,6 +59,21 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
   const [hasBattery, setHasBattery] = useState<boolean>(false);
   const [systemLosses, setSystemLosses] = useState<number>(17.5);
   const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
+  const [pdfStatus, setPdfStatus] = useState<{
+    downloading: boolean;
+    error: string | null;
+    successMessage: string | null;
+  }>({
+    downloading: false,
+    error: null,
+    successMessage: null,
+  });
+
+  useEffect(() => {
+    if (initialProfile.name) {
+      setApplicantName(initialProfile.name);
+    }
+  }, [initialProfile.name]);
 
   // Calculate live results using our domain math
   const result: SolarCalculationResult = calculateSolarFeasibility({
@@ -59,6 +85,37 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
     hasBatteryBackup: hasBattery,
     systemLossesPercent: systemLosses,
   });
+
+  const handleDownloadSolarPdf = async () => {
+    setPdfStatus({ downloading: true, error: null, successMessage: null });
+    try {
+      const pdfBytes = await generateSolarFeasibilityPdf({
+        applicantName: applicantName.trim() || initialProfile.name || 'Household Applicant',
+        district,
+        monthlyKwh,
+        monthlyBillInr: monthlyBill,
+        rooftopAreaSqFt: rooftopArea,
+        hasBatteryBackup: hasBattery,
+        calculation: result,
+        generatedAt: new Date(),
+      });
+
+      const downloadResult = triggerBrowserPdfDownload(pdfBytes, SOLAR_REPORT_FILENAME);
+      setPdfStatus({
+        downloading: false,
+        error: null,
+        successMessage: `Downloaded ${downloadResult.filename} (${(
+          downloadResult.sizeBytes / 1024
+        ).toFixed(1)} KB)`,
+      });
+    } catch (err: any) {
+      setPdfStatus({
+        downloading: false,
+        error: err?.message || 'Failed to generate Solar Feasibility PDF.',
+        successMessage: null,
+      });
+    }
+  };
 
   // Comparison chart data: Current vs With Rooftop Solar
   const billComparisonData = [
@@ -75,7 +132,7 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
   ];
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-6 pb-12" data-testid="solar-calculator-view">
       {/* Hero Banner */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 sm:p-8 shadow-xs relative overflow-hidden">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -93,15 +150,56 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
             </p>
           </div>
 
-          <button
-            onClick={() => setShowPrintModal(true)}
-            className="px-4 py-2.5 rounded-xl bg-[#14532D] hover:bg-emerald-900 text-xs font-bold text-white flex items-center gap-2 transition-all shadow-xs self-start md:self-auto shrink-0"
-          >
-            <FileText className="w-4 h-4 text-[#A3E635]" />
-            <span>Generate PDF Feasibility Summary</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2.5 self-start md:self-auto shrink-0">
+            <button
+              type="button"
+              data-testid="download-solar-pdf-btn"
+              onClick={handleDownloadSolarPdf}
+              disabled={pdfStatus.downloading}
+              className="px-4 py-2.5 rounded-xl bg-[#14532D] hover:bg-emerald-900 disabled:opacity-60 text-xs font-bold text-white flex items-center gap-2 transition-all shadow-xs cursor-pointer"
+            >
+              {pdfStatus.downloading ? (
+                <RefreshCw className="w-4 h-4 text-[#A3E635] animate-spin" />
+              ) : (
+                <Download className="w-4 h-4 text-[#A3E635]" />
+              )}
+              <span>
+                {pdfStatus.downloading
+                  ? 'Generating PDF...'
+                  : 'Generate PDF Feasibility Summary'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="preview-solar-summary-btn"
+              onClick={() => setShowPrintModal(true)}
+              className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-xs font-bold text-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <FileText className="w-3.5 h-3.5 text-[#059669]" />
+              <span>Preview Report</span>
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* PDF Download Feedback Banner */}
+      {(pdfStatus.successMessage || pdfStatus.error) && (
+        <div
+          data-testid="solar-pdf-status"
+          className={`p-3.5 rounded-xl border text-xs font-semibold flex items-center justify-between ${
+            pdfStatus.error
+              ? 'bg-red-50 border-red-200 text-red-900'
+              : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{pdfStatus.error || pdfStatus.successMessage}</span>
+          </div>
+          <span className="font-mono text-[11px] opacity-80">application/pdf</span>
+        </div>
+      )}
 
       {/* Main Grid: Inputs vs Outputs */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -115,12 +213,28 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
             <span className="text-[11px] text-gray-400">All inputs configurable</span>
           </div>
 
+          {/* Applicant Name */}
+          <div>
+            <label htmlFor="solarApplicantName" className="block text-xs font-bold text-gray-700 mb-1">
+              Applicant Name
+            </label>
+            <input
+              id="solarApplicantName"
+              type="text"
+              value={applicantName}
+              onChange={(e) => setApplicantName(e.target.value)}
+              className="w-full px-3.5 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-emerald-500 text-xs bg-white font-semibold"
+              placeholder="Enter household applicant name"
+            />
+          </div>
+
           {/* District selector */}
           <div>
-            <label className="block text-xs font-bold text-gray-700 mb-1">
+            <label htmlFor="solarDistrictSelect" className="block text-xs font-bold text-gray-700 mb-1">
               District in Gujarat
             </label>
             <select
+              id="solarDistrictSelect"
               value={district}
               onChange={(e) => setDistrict(e.target.value)}
               className="w-full px-3.5 py-2.5 rounded-xl border border-gray-300 focus:ring-2 focus:ring-emerald-500 text-xs bg-white font-medium"
@@ -465,7 +579,7 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
         </div>
       </div>
 
-      {/* Feasibility PDF Modal / Print Preview */}
+      {/* Feasibility PDF Modal / Summary Preview */}
       {showPrintModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white max-w-xl w-full rounded-2xl shadow-2xl p-6 border border-emerald-200 space-y-4">
@@ -473,10 +587,11 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
               <div className="flex items-center gap-2">
                 <Sun className="w-6 h-6 text-emerald-600" />
                 <h3 className="font-bold text-lg text-emerald-950 font-heading">
-                  GEDA Surya Gujarat Solar Feasibility Report
+                  UrjaSaathi Solar Feasibility Report Summary
                 </h3>
               </div>
               <button
+                type="button"
                 onClick={() => setShowPrintModal(false)}
                 className="text-gray-400 hover:text-gray-600 font-bold"
               >
@@ -487,7 +602,7 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
             <div className="space-y-3 text-xs text-gray-700">
               <div className="grid grid-cols-2 gap-2 p-3 bg-gray-50 rounded-lg">
                 <div>
-                  <strong>Applicant:</strong> {initialProfile.name}
+                  <strong>Applicant:</strong> {applicantName || initialProfile.name}
                 </div>
                 <div>
                   <strong>District:</strong> {district}, Gujarat
@@ -497,6 +612,12 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
                 </div>
                 <div>
                   <strong>Consumption:</strong> {monthlyKwh} kWh/mo
+                </div>
+                <div>
+                  <strong>Report Date:</strong> {formatIstDate(new Date())}
+                </div>
+                <div>
+                  <strong>DISCOM Tariff:</strong> ₹{result.assumptions.discomTariffRateInr}/kWh
                 </div>
               </div>
 
@@ -517,13 +638,16 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
                   <strong>Net Investment:</strong> ₹{result.netSystemCostInr.toLocaleString('en-IN')}
                 </p>
                 <p>
+                  <strong>Estimated Annual Savings:</strong> ₹{result.annualSavingsInr.toLocaleString('en-IN')}/yr
+                </p>
+                <p>
                   <strong>Payback Period:</strong> {result.paybackPeriodYears} Years
                 </p>
                 <p>
                   <strong>Performance Ratio:</strong> {result.assumptions.performanceRatio} (System Losses: {result.assumptions.systemLossesPercent}%)
                 </p>
                 <p>
-                  <strong>Surplus Feed-in Tariff:</strong> ₹{result.assumptions.surplusInjectionCompensationInr}/kWh (GERC GIDRES Regulations 2026, distinct from APPC)
+                  <strong>Surplus Feed-in Tariff:</strong> ₹{result.assumptions.surplusInjectionCompensationInr}/kWh (GERC GIDRES Regulations 2026)
                 </p>
               </div>
 
@@ -534,18 +658,25 @@ export const SolarCalculatorView: React.FC<SolarCalculatorViewProps> = ({ initia
 
             <div className="flex items-center justify-end gap-3 pt-3 border-t">
               <button
+                type="button"
                 onClick={() => setShowPrintModal(false)}
-                className="px-4 py-2 rounded-lg border text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                className="px-4 py-2 rounded-lg border text-xs font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer"
               >
                 Close
               </button>
               <button
-                onClick={() => {
-                  window.print();
-                }}
-                className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+                type="button"
+                data-testid="modal-download-solar-pdf-btn"
+                onClick={handleDownloadSolarPdf}
+                disabled={pdfStatus.downloading}
+                className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold flex items-center gap-2 cursor-pointer"
               >
-                Print / Save PDF
+                <Download className="w-4 h-4" />
+                <span>
+                  {pdfStatus.downloading
+                    ? 'Generating PDF...'
+                    : `Download PDF (${SOLAR_REPORT_FILENAME})`}
+                </span>
               </button>
             </div>
           </div>

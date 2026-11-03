@@ -24,6 +24,15 @@ import {
   getPersistenceStatus,
   verifyServerUserIdentity,
 } from './src/db/supabasePersistence.ts';
+import {
+  generateSolarFeasibilityPdf,
+  generateGreenPassportPdf,
+  generateQrCodeDataUrl,
+  resolveVerificationBaseUrl,
+  PROTOTYPE_PASSPORT_DISCLAIMER,
+  SOLAR_REPORT_FILENAME,
+  PASSPORT_REPORT_FILENAME,
+} from './src/utils/pdfGenerator.ts';
 
 dotenv.config();
 
@@ -605,83 +614,22 @@ Keep responses clear, structured with bullet points where helpful, and directly 
   }
 });
 
-// Community and Leaderboard Data
+// Gujarat Regional Reference Benchmarks (No fabricated user profiles, rankings, or environmental savings)
 app.get('/api/community/stats', (_req: Request, res: Response) => {
-  // Realistic demonstration data clearly labelled for GEDA Mission LiFE
-  const districtStats = [
-    { district: 'Ahmedabad', households: 48200, mwhSaved: 1420, co2ReducedTonnes: 1164, avgScore: 78 },
-    { district: 'Surat', households: 39500, mwhSaved: 1180, co2ReducedTonnes: 967, avgScore: 76 },
-    { district: 'Vadodara', households: 28400, mwhSaved: 890, co2ReducedTonnes: 729, avgScore: 75 },
-    { district: 'Rajkot', households: 24100, mwhSaved: 760, co2ReducedTonnes: 623, avgScore: 74 },
-    { district: 'Gandhinagar', households: 18900, mwhSaved: 630, co2ReducedTonnes: 516, avgScore: 82 },
-    { district: 'Bhavnagar', households: 14200, mwhSaved: 440, co2ReducedTonnes: 360, avgScore: 72 },
-    { district: 'Kutch', households: 12800, mwhSaved: 410, co2ReducedTonnes: 336, avgScore: 73 },
-    { district: 'Anand', households: 11500, mwhSaved: 360, co2ReducedTonnes: 295, avgScore: 71 },
-    { district: 'Jamnagar', households: 10400, mwhSaved: 320, co2ReducedTonnes: 262, avgScore: 70 },
-    { district: 'Mehsana', households: 9800, mwhSaved: 295, co2ReducedTonnes: 241, avgScore: 69 },
-    { district: 'Bharuch', households: 9200, mwhSaved: 280, co2ReducedTonnes: 229, avgScore: 70 },
-    { district: 'Junagadh', households: 8600, mwhSaved: 255, co2ReducedTonnes: 209, avgScore: 68 },
+  const districtBenchmarks = [
+    { district: 'Ahmedabad', discom: 'Torrent Power / UGVCL', solarInsolationPsh: 5.3, ceaEmissionFactorKgPerKwh: 0.675, surplusFeedInInrPerKwh: 2.25 },
+    { district: 'Surat', discom: 'DGVCL / Torrent Power', solarInsolationPsh: 5.15, ceaEmissionFactorKgPerKwh: 0.675, surplusFeedInInrPerKwh: 2.25 },
+    { district: 'Vadodara', discom: 'MGVCL', solarInsolationPsh: 5.2, ceaEmissionFactorKgPerKwh: 0.675, surplusFeedInInrPerKwh: 2.25 },
+    { district: 'Rajkot', discom: 'PGVCL', solarInsolationPsh: 5.4, ceaEmissionFactorKgPerKwh: 0.675, surplusFeedInInrPerKwh: 2.25 },
+    { district: 'Gandhinagar', discom: 'UGVCL / Torrent Power', solarInsolationPsh: 5.35, ceaEmissionFactorKgPerKwh: 0.675, surplusFeedInInrPerKwh: 2.25 },
+    { district: 'Bhavnagar', discom: 'PGVCL', solarInsolationPsh: 5.35, ceaEmissionFactorKgPerKwh: 0.675, surplusFeedInInrPerKwh: 2.25 },
   ];
-
-  const topChampions = [
-    { rank: 1, name: 'Bhavik Patel', district: 'Gandhinagar', greenScore: 96, missionsCompleted: 48, solarUser: true, streakDays: 34 },
-    { rank: 2, name: 'Ananya Shah', district: 'Ahmedabad', greenScore: 94, missionsCompleted: 42, solarUser: true, streakDays: 28 },
-    { rank: 3, name: 'Dhaval Joshi', district: 'Vadodara', greenScore: 92, missionsCompleted: 39, solarUser: false, streakDays: 21 },
-    { rank: 4, name: 'Meera Trivedi', district: 'Rajkot', greenScore: 90, missionsCompleted: 36, solarUser: true, streakDays: 19 },
-    { rank: 5, name: 'Kinjal Mehta', district: 'Surat', greenScore: 89, missionsCompleted: 35, solarUser: false, streakDays: 16 },
-    { rank: 6, name: 'Hitesh Parmar', district: 'Bhavnagar', greenScore: 88, missionsCompleted: 31, solarUser: true, streakDays: 14 },
-    { rank: 7, name: 'Pooja Barot', district: 'Kutch', greenScore: 87, missionsCompleted: 29, solarUser: false, streakDays: 12 },
-    { rank: 8, name: 'Jayesh Dave', district: 'Anand', greenScore: 86, missionsCompleted: 27, solarUser: true, streakDays: 11 },
-  ];
-
-  const activeChallenges = [
-    {
-      id: 'summer-24c-drive',
-      title: 'Gujarat 24°C Summer AC Drive',
-      description: 'Run AC at or above 24°C during peak afternoon hours (1 PM – 4 PM) for 7 consecutive days.',
-      participants: 14500,
-      targetGoal: '50,000 kWh saved across Gujarat',
-      progressPct: 68,
-      rewardBadge: 'Master of Chill',
-      daysRemaining: 12,
-    },
-    {
-      id: 'saurashtra-solar-surge',
-      title: 'Terrace Solar Survey Sprint',
-      description: 'Assess rooftop solar potential and inspect shading to fast-track PM Surya Ghar adoption.',
-      participants: 8200,
-      targetGoal: '10,000 terraces surveyed',
-      progressPct: 82,
-      rewardBadge: 'Sun Seeker',
-      daysRemaining: 5,
-    },
-    {
-      id: 'phantom-zero-weekend',
-      title: 'Zero Vampire Power Weekend',
-      description: 'Turn off all main switches for unused entertainment systems and chargers before sleeping.',
-      participants: 19800,
-      targetGoal: '100% phantom cut-off',
-      progressPct: 91,
-      rewardBadge: 'Ghost Slayer',
-      daysRemaining: 2,
-    },
-  ];
-
-  const aggregateTotals = {
-    totalHouseholdsJoined: 247600,
-    totalMwhSaved: 6850,
-    totalCo2AvertedTonnes: 5617,
-    totalRupeesSavedLakhs: 428,
-    equivalentTreesPlanted: 280850,
-  };
 
   res.json({
-    aggregateTotals,
-    districtStats,
-    topChampions,
-    activeChallenges,
-    isDemoData: true,
-    dataNotice: 'Aggregated demonstration figures benchmarked against GEDA Mission LiFE residential surveys across Gujarat.',
+    districtBenchmarks,
+    topChampions: [],
+    dataNotice:
+      'UrjaSaathi reports only authentic user-recorded mission completions and official Gujarat regulatory/engineering reference parameters (CEA Version 22.0 & GERC GIDRES 2026). No fabricated user profiles, rankings, or environmental savings are generated.',
   });
 });
 
@@ -812,6 +760,16 @@ app.post('/api/missions/complete', async (req: Request, res: Response) => {
   }
 });
 
+function getRequestVerificationBaseUrl(req: Request): string {
+  const forwardedProto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim();
+  const forwardedHost = (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim();
+  return resolveVerificationBaseUrl({
+    env: process.env,
+    requestProtocol: forwardedProto || req.protocol || 'https',
+    requestHost: forwardedHost || req.get('host') || undefined,
+  });
+}
+
 // Issue or refresh a verifiable Green Impact Passport credential record from authoritative mission ledger
 app.post('/api/passport/credentials/issue', async (req: Request, res: Response) => {
   try {
@@ -828,26 +786,117 @@ app.post('/api/passport/credentials/issue', async (req: Request, res: Response) 
     }
 
     setSessionCookie(res, identity.sessionToken);
-    const { holderName, district, greenScore } = req.body || {};
+    const {
+      holderName,
+      district,
+      greenScore,
+      publicDisplayConsent,
+      unlockedBadgeIds,
+      rotateToken,
+    } = req.body || {};
 
-    const { record, statusReport } = await persistenceEngine.upsertCredentialRecord({
+    const issued = await persistenceEngine.upsertCredentialRecord({
       verifiedUserId: identity.userId,
       holderName,
       district,
       greenScore: Number(greenScore) || 74,
+      publicDisplayConsent:
+        typeof publicDisplayConsent === 'boolean' ? publicDisplayConsent : undefined,
+      unlockedBadgeIds: Array.isArray(unlockedBadgeIds) ? unlockedBadgeIds : undefined,
+      rotateToken: Boolean(rotateToken),
     });
 
+    const baseUrl = getRequestVerificationBaseUrl(req);
+    const verificationUrl = `${baseUrl}/verify/${encodeURIComponent(issued.verificationToken)}`;
+    const qrDataUrl = await generateQrCodeDataUrl(verificationUrl);
+
     res.json({
-      credential: record,
+      credential: issued.record,
+      verificationToken: issued.verificationToken,
+      tokenHash: issued.tokenHash,
+      verificationUrl,
+      qrDataUrl,
+      publicDisplayConsent: issued.publicDisplayConsent,
+      unlockedBadgeIds: issued.unlockedBadgeIds,
+      disclaimer: PROTOTYPE_PASSPORT_DISCLAIMER,
       bodyUserIdIgnored: identity.bodyUserIdIgnored,
-      ...statusReport,
+      ...issued.statusReport,
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to issue credential record' });
   }
 });
 
-// Public QR Verification Endpoint for Green Impact Passport credentials
+// Update passport credential status (active | revoked), public display consent, or rotate QR token
+app.post('/api/passport/credentials/status', async (req: Request, res: Response) => {
+  try {
+    const identity = await verifyServerUserIdentity({
+      authorizationHeader: req.headers.authorization,
+      sessionHeader: req.headers['x-urjasaathi-session'] as string | undefined,
+      cookieHeader: req.headers.cookie,
+      untrustedBodyUserId: req.body?.userId || req.body?.user_id,
+    });
+
+    if (!identity.authenticated) {
+      res.status(401).json({ error: identity.error || 'Unauthorized session token' });
+      return;
+    }
+
+    setSessionCookie(res, identity.sessionToken);
+    const { status, publicDisplayConsent, rotateToken } = req.body || {};
+    const validStatus =
+      status === 'revoked' ? 'revoked' : status === 'active' ? 'active' : undefined;
+
+    const updated = await persistenceEngine.updateCredentialLifecycle({
+      verifiedUserId: identity.userId,
+      status: validStatus,
+      publicDisplayConsent:
+        typeof publicDisplayConsent === 'boolean' ? publicDisplayConsent : undefined,
+      rotateToken: Boolean(rotateToken),
+    });
+
+    const baseUrl = getRequestVerificationBaseUrl(req);
+    const verificationUrl = `${baseUrl}/verify/${encodeURIComponent(updated.verificationToken)}`;
+    const qrDataUrl = await generateQrCodeDataUrl(verificationUrl);
+
+    res.json({
+      credential: updated.record,
+      verificationToken: updated.verificationToken,
+      tokenHash: updated.tokenHash,
+      verificationUrl,
+      qrDataUrl,
+      publicDisplayConsent: updated.publicDisplayConsent,
+      unlockedBadgeIds: updated.unlockedBadgeIds,
+      disclaimer: PROTOTYPE_PASSPORT_DISCLAIMER,
+      ...updated.statusReport,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to update credential lifecycle' });
+  }
+});
+
+// Public QR Token Verification Endpoint (never exposes private bills, phone numbers, or internal user_id)
+app.get('/api/passport/verify/:token', async (req: Request, res: Response) => {
+  try {
+    const { token } = req.params;
+    const result = await persistenceEngine.verifyPublicPassportToken(token);
+
+    res.json({
+      verified: result.verified,
+      verificationState: result.verificationState,
+      signatureValid: result.signatureValid,
+      reason: result.reason,
+      error: result.verified ? undefined : result.reason || 'Credential verification failed',
+      disclaimer: PROTOTYPE_PASSPORT_DISCLAIMER,
+      publicCredential: result.publicCredential,
+      ...result.statusReport,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to verify passport token' });
+  }
+});
+
+// Legacy / Direct Credential ID Verification Endpoint
 app.get('/api/passport/credentials/:credentialId/verify', async (req: Request, res: Response) => {
   try {
     const { credentialId } = req.params;
@@ -871,6 +920,159 @@ app.get('/api/passport/credentials/:credentialId/verify', async (req: Request, r
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to verify credential record' });
+  }
+});
+
+// Server-side Solar Feasibility PDF Download Endpoint (application/pdf)
+app.post('/api/reports/solar-pdf', async (req: Request, res: Response) => {
+  try {
+    const {
+      applicantName,
+      district,
+      monthlyKwh,
+      monthlyBillInr,
+      rooftopAreaSqFt,
+      unitRateInr,
+      hasBatteryBackup,
+      systemLossesPercent,
+    } = req.body || {};
+
+    const cleanKwh = Math.max(10, Number(monthlyKwh) || 300);
+    const cleanArea = Math.max(20, Number(rooftopAreaSqFt) || 350);
+    const cleanDistrict = (district || 'Ahmedabad').trim();
+    const cleanTariff = Number(unitRateInr) || 6.25;
+    const cleanBill =
+      monthlyBillInr !== undefined
+        ? Number(monthlyBillInr)
+        : Math.round(cleanKwh * cleanTariff);
+    const cleanLosses =
+      systemLossesPercent !== undefined ? Number(systemLossesPercent) : 17.5;
+
+    const calculation = calculateSolarFeasibility({
+      monthlyKwh: cleanKwh,
+      rooftopAreaSqFt: cleanArea,
+      district: cleanDistrict,
+      monthlyBillInr: cleanBill,
+      unitRateInr: cleanTariff,
+      hasBatteryBackup: Boolean(hasBatteryBackup),
+      systemLossesPercent: cleanLosses,
+    });
+
+    const pdfBytes = await generateSolarFeasibilityPdf({
+      applicantName: (applicantName || 'Household Applicant').trim(),
+      district: cleanDistrict,
+      monthlyKwh: cleanKwh,
+      monthlyBillInr: cleanBill,
+      rooftopAreaSqFt: cleanArea,
+      hasBatteryBackup: Boolean(hasBatteryBackup),
+      calculation,
+      generatedAt: new Date(),
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${SOLAR_REPORT_FILENAME}"`
+    );
+    res.setHeader('Content-Length', String(pdfBytes.byteLength));
+    res.send(Buffer.from(pdfBytes));
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to generate Solar Feasibility PDF' });
+  }
+});
+
+// Server-side Green Impact Passport PDF Download Endpoint (application/pdf)
+app.post('/api/reports/passport-pdf', async (req: Request, res: Response) => {
+  try {
+    const identity = await verifyServerUserIdentity({
+      authorizationHeader: req.headers.authorization,
+      sessionHeader: req.headers['x-urjasaathi-session'] as string | undefined,
+      cookieHeader: req.headers.cookie,
+      untrustedBodyUserId: req.body?.userId || req.body?.user_id,
+    });
+
+    setSessionCookie(res, identity.sessionToken);
+
+    const {
+      holderName,
+      district,
+      greenScore,
+      tierName,
+      completedMissionsCount,
+      completedMissionTitles,
+      co2SavedKg,
+      treeEquivalent,
+      streakDays,
+      badges,
+      publicDisplayConsent,
+    } = req.body || {};
+
+    const unlockedBadgeIds = Array.isArray(badges)
+      ? badges.filter((b: any) => b && b.unlocked).map((b: any) => String(b.id))
+      : ['pioneer'];
+
+    const issued = await persistenceEngine.upsertCredentialRecord({
+      verifiedUserId: identity.userId,
+      holderName,
+      district,
+      greenScore: Number(greenScore) || 74,
+      publicDisplayConsent:
+        typeof publicDisplayConsent === 'boolean' ? publicDisplayConsent : undefined,
+      unlockedBadgeIds,
+    });
+
+    const baseUrl = getRequestVerificationBaseUrl(req);
+    const verificationUrl = `${baseUrl}/verify/${encodeURIComponent(issued.verificationToken)}`;
+
+    const pdfBytes = await generateGreenPassportPdf({
+      holderName: issued.record.holder_name,
+      publicDisplayConsent: issued.publicDisplayConsent,
+      passportId: issued.record.credential_id,
+      district: issued.record.district,
+      greenScore: Number(greenScore) || issued.record.green_score,
+      tierName: (tierName || 'Active Eco-Warrior').trim(),
+      completedMissionsCount:
+        completedMissionsCount !== undefined
+          ? Number(completedMissionsCount)
+          : issued.record.missions_completed,
+      completedMissionTitles: Array.isArray(completedMissionTitles)
+        ? completedMissionTitles
+        : [],
+      co2SavedKg:
+        co2SavedKg !== undefined ? Number(co2SavedKg) : Number(issued.record.co2_saved_kg),
+      treeEquivalent:
+        treeEquivalent !== undefined
+          ? Number(treeEquivalent)
+          : Math.max(1, Math.round((Number(co2SavedKg) || 1) / 1.67)),
+      streakDays:
+        streakDays !== undefined ? Number(streakDays) : Number(issued.record.streak_days),
+      badges: Array.isArray(badges)
+        ? badges
+        : [
+            {
+              id: 'pioneer',
+              name: 'Mission LiFE Pioneer',
+              category: 'Foundation',
+              unlocked: true,
+              description: 'Completed onboarding and established household carbon baseline.',
+            },
+          ],
+      issueDate: issued.record.issued_at,
+      verificationUrl,
+      persistenceMode: issued.statusReport.persistenceMode,
+      durableStorageAvailable: issued.statusReport.durableStorageAvailable,
+      credentialStatus: issued.record.status,
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${PASSPORT_REPORT_FILENAME}"`
+    );
+    res.setHeader('Content-Length', String(pdfBytes.byteLength));
+    res.send(Buffer.from(pdfBytes));
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to generate Green Impact Passport PDF' });
   }
 });
 

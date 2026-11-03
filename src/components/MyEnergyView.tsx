@@ -36,21 +36,35 @@ import {
   CEA_VER_22_FY25_26_EMISSION_FACTOR_KG_CO2_PER_KWH,
 } from '../utils/sustainabilityMath';
 import { GUJARAT_AVG_TARIFF_INR_PER_KWH } from '../utils/energyMathChat';
+import { MISSIONS_LIST } from '../data/missionsData';
+import {
+  generateImpactReportPdf,
+  triggerBrowserPdfDownload,
+  IMPACT_REPORT_FILENAME,
+} from '../utils/pdfGenerator';
 
 interface MyEnergyViewProps {
   appState: AppState;
   setActiveTab: (tab: string) => void;
 }
 
-export const MyEnergyView: React.FC<MyEnergyViewProps> = ({ appState, setActiveTab }) => {
-  const { profile } = appState;
+export const MyEnergyView: React.FC<MyEnergyViewProps> = ({ appState }) => {
+  const { profile, streakDays, completedMissions } = appState;
   const aggregates = calculateUserAggregates(appState);
-  const { baselineMetrics } = aggregates;
+  const {
+    baselineMetrics,
+    effectiveGreenScore,
+    totalMissions,
+    totalPoints,
+    totalCo2SavedKg,
+    totalInrSaved,
+  } = aggregates;
 
   // Expandable sections state
-  const [showApplianceBreakdown, setShowApplianceBreakdown] = useState<boolean>(true);
   const [showMethodology, setShowMethodology] = useState<boolean>(false);
   const [showDiscomTariffs, setShowDiscomTariffs] = useState<boolean>(false);
+  const [downloadingReport, setDownloadingReport] = useState<boolean>(false);
+  const [reportFeedback, setReportFeedback] = useState<string | null>(null);
 
   // Appliance Energy Calculator state
   const [calcWatts, setCalcWatts] = useState<number>(170);
@@ -93,14 +107,21 @@ export const MyEnergyView: React.FC<MyEnergyViewProps> = ({ appState, setActiveT
     calcWatts === 170 ||
     selectedPreset === 'inverter-ac';
 
-  // 6-month historical data
+  const targetMonthlyKwh = (profile.familyMembers || 4) * 75;
+  const recordedKwhSavedFromMissions = Math.round(
+    totalCo2SavedKg / CEA_VER_22_FY25_26_EMISSION_FACTOR_KG_CO2_PER_KWH
+  );
+  const netPostMissionKwh = Math.max(0, profile.monthlyKwh - recordedKwhSavedFromMissions);
+
+  // Actual user baseline vs post-mission net vs Mission LiFE target
   const historicalData = [
-    { month: 'Jun', actual: Math.round(profile.monthlyKwh * 1.25), target: profile.familyMembers * 90 },
-    { month: 'Jul', actual: Math.round(profile.monthlyKwh * 1.18), target: profile.familyMembers * 85 },
-    { month: 'Aug', actual: Math.round(profile.monthlyKwh * 1.05), target: profile.familyMembers * 80 },
-    { month: 'Sep', actual: Math.round(profile.monthlyKwh * 1.02), target: profile.familyMembers * 80 },
-    { month: 'Oct', actual: Math.round(profile.monthlyKwh * 0.95), target: profile.familyMembers * 75 },
-    { month: 'Current', actual: profile.monthlyKwh, target: profile.familyMembers * 75 },
+    { month: 'Recorded Baseline', actual: profile.monthlyKwh, target: targetMonthlyKwh },
+    { month: 'After Recorded Missions', actual: netPostMissionKwh, target: targetMonthlyKwh },
+    {
+      month: 'With Full Habit Adoption',
+      actual: Math.max(0, profile.monthlyKwh - baselineMetrics.potentialMonthlySavingKwh),
+      target: targetMonthlyKwh,
+    },
   ];
 
   // Appliance distribution data
@@ -115,34 +136,95 @@ export const MyEnergyView: React.FC<MyEnergyViewProps> = ({ appState, setActiveT
 
   const PIE_COLORS = ['#059669', '#10b981', '#34d399', '#6ee7b7', '#0284c7', '#38bdf8', '#f59e0b', '#fbbf24'];
 
-  const handlePrintReport = () => {
-    window.print();
+  const handleDownloadEnergyReport = async () => {
+    setDownloadingReport(true);
+    setReportFeedback(null);
+    try {
+      const completedLogs = Object.values(completedMissions || {});
+      const completedMissionEntries = completedLogs.map((log) => {
+        const found = MISSIONS_LIST.find((m) => m.id === log.missionId);
+        return {
+          missionId: log.missionId,
+          title: found ? found.title : log.missionId,
+          completionDate: log.completionDate,
+          points: log.points,
+          co2SavedKg: log.co2SavedKg,
+          inrSaved: log.inrSaved,
+        };
+      });
+
+      const pdfBytes = await generateImpactReportPdf({
+        holderName: profile.name || 'Household Citizen',
+        district: profile.district || 'Ahmedabad',
+        familyMembers: profile.familyMembers || 4,
+        monthlyKwh: profile.monthlyKwh,
+        monthlyBillInr: profile.monthlyBillInr,
+        baselineMonthlyCarbonKg: baselineMetrics.monthlyCarbonKg,
+        potentialMonthlySavingKwh: baselineMetrics.potentialMonthlySavingKwh,
+        potentialMonthlySavingInr: baselineMetrics.potentialMonthlySavingInr,
+        greenScore: effectiveGreenScore,
+        tierName: baselineMetrics.tier.name,
+        streakDays,
+        rewardPoints: totalPoints,
+        totalElectricityInrSaved: totalInrSaved,
+        totalCo2SavedKg,
+        completedMissionsCount: totalMissions,
+        completedMissions: completedMissionEntries,
+        monthlyProgress: historicalData.map((row) => ({
+          month: row.month,
+          actualKwh: row.actual,
+          targetKwh: row.target,
+        })),
+        generatedAt: new Date(),
+      });
+
+      const downloadResult = triggerBrowserPdfDownload(pdfBytes, IMPACT_REPORT_FILENAME);
+      setReportFeedback(
+        `Downloaded ${downloadResult.filename} (${(downloadResult.sizeBytes / 1024).toFixed(1)} KB)`
+      );
+    } catch (err: any) {
+      setReportFeedback(err?.message || 'Failed to generate Impact Report PDF.');
+    } finally {
+      setDownloadingReport(false);
+    }
   };
 
   return (
     <div className="space-y-6 pb-12">
       {/* 1. Header Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800">
-            <span className="w-2 h-2 rounded-full bg-[#059669]" />
-            <span>Detailed Energy Analytics & Consumption Tracking</span>
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800">
+              <span className="w-2 h-2 rounded-full bg-[#059669]" />
+              <span>Detailed Energy Analytics &amp; Consumption Tracking</span>
+            </div>
+            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight font-heading mt-1">
+              My Household Energy
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-600 mt-1">
+              Calculated baseline for {profile.name || 'Your Household'}{profile.district ? ` in ${profile.district}, Gujarat` : ''} ({profile.familyMembers} family members).
+            </p>
           </div>
-          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight font-heading mt-1">
-            My Household Energy
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-600 mt-1">
-            Audited baseline for {profile.name} in {profile.district}, Gujarat ({profile.familyMembers} family members).
-          </p>
+
+          <button
+            type="button"
+            data-testid="download-energy-impact-report-btn"
+            onClick={handleDownloadEnergyReport}
+            disabled={downloadingReport}
+            className="self-start sm:self-auto px-4 py-2.5 rounded-xl bg-[#14532D] hover:bg-emerald-900 disabled:opacity-60 text-white text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
+          >
+            <Download className="w-4 h-4 text-[#A3E635]" />
+            <span>{downloadingReport ? 'Generating PDF...' : 'Download Impact Report'}</span>
+          </button>
         </div>
 
-        <button
-          onClick={handlePrintReport}
-          className="self-start sm:self-auto px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200/80 border border-slate-200 text-xs font-bold text-slate-700 flex items-center gap-2 transition-colors cursor-pointer"
-        >
-          <Printer className="w-4 h-4 text-slate-600" />
-          <span>Print / Save Energy Report</span>
-        </button>
+        {reportFeedback && (
+          <div className="mt-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-900 flex items-center justify-between">
+            <span>{reportFeedback}</span>
+            <span className="font-mono text-[11px]">application/pdf</span>
+          </div>
+        )}
       </div>
 
       {/* 2. Four Key Energy Metrics */}

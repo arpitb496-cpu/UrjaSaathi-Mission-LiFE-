@@ -110,14 +110,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (Math.min(100, Math.max(0, effectiveGreenScore)) / 100) * circumference;
 
-  // 6-Month clean electricity consumption trend vs LiFE benchmark
+  // Actual recorded consumption vs post-mission net vs Mission LiFE benchmark
+  const recordedKwhSaved = Math.round(totalCo2SavedKg / 0.675);
+  const targetKwh = (profile.familyMembers || 4) * 75;
   const monthlyTrendData = [
-    { month: 'Jun', consumption: Math.round(profile.monthlyKwh * 1.22), benchmark: profile.familyMembers * 85 },
-    { month: 'Jul', consumption: Math.round(profile.monthlyKwh * 1.15), benchmark: profile.familyMembers * 80 },
-    { month: 'Aug', consumption: Math.round(profile.monthlyKwh * 1.08), benchmark: profile.familyMembers * 80 },
-    { month: 'Sep', consumption: Math.round(profile.monthlyKwh * 1.02), benchmark: profile.familyMembers * 75 },
-    { month: 'Oct', consumption: Math.round(profile.monthlyKwh * 0.95), benchmark: profile.familyMembers * 75 },
-    { month: 'Current', consumption: profile.monthlyKwh, benchmark: profile.familyMembers * 70 },
+    { month: 'Recorded Baseline', consumption: profile.monthlyKwh, benchmark: targetKwh },
+    {
+      month: 'After Missions',
+      consumption: Math.max(0, profile.monthlyKwh - recordedKwhSaved),
+      benchmark: targetKwh,
+    },
+    {
+      month: 'With Full Habits',
+      consumption: Math.max(0, profile.monthlyKwh - baselineMetrics.potentialMonthlySavingKwh),
+      benchmark: targetKwh,
+    },
   ];
 
   // Potential monthly savings estimate
@@ -224,9 +231,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="w-full pt-3 border-t border-slate-100 text-left">
             <p className="text-xs text-slate-600 leading-snug">
               {effectiveGreenScore >= 70
-                ? `Outstanding! You are performing better than 74% of households${profile.district ? ` in ${profile.district}` : ''}.`
+                ? `Strong efficiency baseline! Your per-capita consumption is ${Math.round(profile.monthlyKwh / Math.max(1, profile.familyMembers))} kWh/month.`
                 : effectiveGreenScore >= 50
-                ? `Good progress! Implementing today's recommended action will lift your score into the top tier.`
+                ? `Good progress! Implementing today's recommended action will lift your household efficiency score.`
                 : `Your household has significant potential to save up to ₹${potentialMonthlySavingsInr} every month.`}
             </p>
             <div className="mt-3 flex items-center justify-between text-[11px]">
@@ -489,19 +496,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 font-heading">
-                    Community &amp; Gujarat Impact
+                    Recorded Household Impact
                   </h3>
-                  <p className="text-[11px] text-slate-500">33-District Sustainability Leaderboard</p>
+                  <p className="text-[11px] text-slate-500">CEA Ver 22.0 Baseline (0.675 kg CO₂/kWh)</p>
                 </div>
               </div>
               <span className="text-[10px] font-bold bg-emerald-50 text-[#059669] px-2 py-0.5 rounded border border-emerald-200">
-                Rank #{profile.district === 'Gandhinagar' ? '1' : '3'}
+                Active Ledger
               </span>
             </div>
 
             <p className="text-xs text-slate-600 leading-relaxed mt-2">
-              Your household is part of the collective Gujarat Mission LiFE drive.
-              Together, Gujarat households have reduced over <strong>1,840 metric tonnes</strong> of peak-hour CO₂ emissions this quarter.
+              Your household sustainability ledger tracks real completed daily actions.
+              So far, your recorded missions have averted <strong>{totalCo2SavedKg} kg CO₂</strong> and saved an estimated <strong>₹{aggregates.totalInrSaved}</strong>.
             </p>
 
             <div className="grid grid-cols-2 gap-3 my-4">
@@ -513,7 +520,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center">
                 <p className="text-[10px] font-semibold text-slate-400 uppercase">LiFE Points</p>
                 <p className="text-lg font-bold text-[#059669]">{aggregates.totalPoints}</p>
-                <p className="text-[10px] text-slate-500 font-medium">Passport Verified</p>
+                <p className="text-[10px] text-slate-500 font-medium">Recorded in Passport</p>
               </div>
             </div>
           </div>
@@ -527,7 +534,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               onClick={() => setActiveTab('impact')}
               className="text-xs font-bold text-[#059669] hover:underline flex items-center gap-1"
             >
-              <span>View Leaderboard</span>
+              <span>View Impact Hub</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>

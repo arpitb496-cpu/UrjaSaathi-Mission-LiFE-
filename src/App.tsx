@@ -10,6 +10,7 @@ import { SolarCalculatorView } from './components/SolarCalculatorView';
 import { ImpactView } from './components/ImpactView';
 import { CommunityView } from './components/CommunityView';
 import { PassportView } from './components/PassportView';
+import { PublicVerificationView } from './components/PublicVerificationView';
 import { OnboardingModal } from './components/OnboardingModal';
 import { HackathonDocsModal } from './components/HackathonDocsModal';
 import {
@@ -30,6 +31,24 @@ import {
 import { Mission } from './data/missionsData';
 import { Leaf } from 'lucide-react';
 
+function extractVerificationTokenFromLocation(): string | null {
+  if (typeof window === 'undefined') return null;
+  const pathMatch = window.location.pathname.match(/^\/verify\/([^/?#]+)/i);
+  if (pathMatch && pathMatch[1]) {
+    try {
+      return decodeURIComponent(pathMatch[1]);
+    } catch {
+      return pathMatch[1];
+    }
+  }
+  const params = new URLSearchParams(window.location.search);
+  const queryToken = params.get('verify');
+  if (queryToken && queryToken.trim()) {
+    return queryToken.trim();
+  }
+  return null;
+}
+
 export default function App() {
   const [appState, setAppState] = useState<AppState>(() => loadAppState());
   const coordinatorRef = useRef<MissionCompletionCoordinator>(
@@ -37,11 +56,19 @@ export default function App() {
   );
   const sessionTokenRef = useRef<string>('');
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [verificationRouteToken, setVerificationRouteToken] = useState<string | null>(() =>
+    extractVerificationTokenFromLocation()
+  );
   const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
   const [isDocsOpen, setIsDocsOpen] = useState<boolean>(false);
 
-  // Check query params (?autostart=1 or ?tab=solar) and hydrate authoritative mission ledger from backend
+  // Check query params (?autostart=1 or ?tab=solar), listen for /verify/:token navigation, and hydrate authoritative mission ledger
   useEffect(() => {
+    const handleLocationChange = () => {
+      setVerificationRouteToken(extractVerificationTokenFromLocation());
+    };
+    window.addEventListener('popstate', handleLocationChange);
+
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get('tab');
     if (
@@ -93,6 +120,10 @@ export default function App() {
       .catch(() => {
         // Offline client cache remains available if network request fails
       });
+
+    return () => {
+      window.removeEventListener('popstate', handleLocationChange);
+    };
   }, []);
 
   // Save changes to localStorage cache and keep coordinator synced
@@ -214,6 +245,31 @@ export default function App() {
     return handleToggleMission(dynamicMission);
   };
 
+  const handleOpenVerificationToken = (token: string) => {
+    const cleanToken = (token || '').trim();
+    if (!cleanToken) return;
+    if (typeof window !== 'undefined') {
+      window.history.pushState({}, '', `/verify/${encodeURIComponent(cleanToken)}`);
+    }
+    setVerificationRouteToken(cleanToken);
+  };
+
+  const handleBackFromVerification = () => {
+    if (typeof window !== 'undefined') {
+      window.history.pushState({}, '', '/');
+    }
+    setVerificationRouteToken(null);
+  };
+
+  if (verificationRouteToken !== null) {
+    return (
+      <PublicVerificationView
+        token={verificationRouteToken}
+        onBackToApp={handleBackFromVerification}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-800 flex flex-col font-sans selection:bg-emerald-200 selection:text-emerald-950">
       {/* 1. Desktop Fixed Left Sidebar */}
@@ -297,6 +353,7 @@ export default function App() {
           {(activeTab === 'impact' || activeTab === 'community' || activeTab === 'passport') && (
             <ImpactView
               appState={appState}
+              onOpenVerificationToken={handleOpenVerificationToken}
               initialSubTab={
                 activeTab === 'passport'
                   ? 'passport'
