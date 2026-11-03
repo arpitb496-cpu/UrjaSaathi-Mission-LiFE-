@@ -24,14 +24,19 @@ import {
   Tooltip,
   CartesianGrid,
 } from 'recharts';
-import { AppState, calculateUserAggregates } from '../utils/storage';
+import {
+  AppState,
+  calculateUserAggregates,
+  isMissionCompletedToday,
+  MissionCompletionResult,
+} from '../utils/storage';
 import { MISSIONS_LIST, Mission } from '../data/missionsData';
 
 interface DashboardViewProps {
   appState: AppState;
   setActiveTab: (tab: string) => void;
   onOpenOnboarding: () => void;
-  onToggleMission?: (mission: Mission) => void;
+  onToggleMission?: (mission: Mission) => MissionCompletionResult | void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -40,35 +45,53 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenOnboarding,
   onToggleMission,
 }) => {
-  const { profile, streakDays, completedMissions } = appState;
+  const { profile, streakDays } = appState;
   const aggregates = calculateUserAggregates(appState);
-  const { baselineMetrics, effectiveGreenScore, totalMissions, totalCo2SavedKg, totalInrSaved } =
+  const { baselineMetrics, effectiveGreenScore, totalMissions, totalCo2SavedKg } =
     aggregates;
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Pick the single highest-impact incomplete mission for today
-  const incompleteMissions = MISSIONS_LIST.filter((m) => !completedMissions[m.id]);
-  const featuredMission = incompleteMissions.length > 0 ? incompleteMissions[0] : MISSIONS_LIST[0];
-  const isFeaturedCompleted = !!completedMissions[featuredMission.id];
+  // Pin the featured mission so that when completed today, the button updates to "Completed Today" and becomes disabled
+  const [featuredMissionId] = useState<string>(() => {
+    const firstIncomplete = MISSIONS_LIST.find((m) => !isMissionCompletedToday(appState, m.id));
+    return firstIncomplete ? firstIncomplete.id : MISSIONS_LIST[0].id;
+  });
+
+  const featuredMission =
+    MISSIONS_LIST.find((m) => m.id === featuredMissionId) || MISSIONS_LIST[0];
+  const isFeaturedCompleted = isMissionCompletedToday(appState, featuredMission.id);
 
   const handleCompleteFeaturedMission = () => {
+    if (isFeaturedCompleted) {
+      setToastMessage(`"${featuredMission.title}" is already completed today. Come back tomorrow!`);
+      setTimeout(() => setToastMessage(null), 3500);
+      return;
+    }
+
     if (onToggleMission) {
-      onToggleMission(featuredMission);
-      if (!isFeaturedCompleted) {
-        try {
-          confetti({
-            particleCount: 55,
-            spread: 60,
-            origin: { y: 0.65 },
-            colors: ['#14532D', '#059669', '#A3E635', '#34D399'],
-          });
-        } catch {
-          // ignore in headless
-        }
-        setToastMessage(`Mission Completed! +${featuredMission.points} LiFE points credited to your passport.`);
+      const result = onToggleMission(featuredMission);
+      if (result && result.status === 'already_completed') {
+        setToastMessage(result.message);
         setTimeout(() => setToastMessage(null), 3500);
+        return;
       }
+
+      try {
+        confetti({
+          particleCount: 55,
+          spread: 60,
+          origin: { y: 0.65 },
+          colors: ['#14532D', '#059669', '#A3E635', '#34D399'],
+        });
+      } catch {
+        // ignore in headless
+      }
+      setToastMessage(
+        result?.message ||
+          `Mission Completed! +${featuredMission.points} LiFE points credited to your passport.`
+      );
+      setTimeout(() => setToastMessage(null), 3500);
     }
   };
 
@@ -338,16 +361,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="flex flex-col sm:flex-row md:flex-col gap-2 shrink-0">
             <button
               onClick={handleCompleteFeaturedMission}
+              disabled={isFeaturedCompleted}
+              aria-disabled={isFeaturedCompleted}
               className={`px-5 py-3 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all shadow-md ${
                 isFeaturedCompleted
-                  ? 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/50'
-                  : 'bg-[#A3E635] hover:bg-lime-300 text-emerald-950 scale-100 hover:scale-[1.02]'
+                  ? 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/50 cursor-not-allowed'
+                  : 'bg-[#A3E635] hover:bg-lime-300 text-emerald-950 scale-100 hover:scale-[1.02] cursor-pointer'
               }`}
             >
               {isFeaturedCompleted ? (
                 <>
                   <Check className="w-4 h-4 text-[#A3E635]" />
-                  <span>Completed Today!</span>
+                  <span>Completed Today</span>
                 </>
               ) : (
                 <>

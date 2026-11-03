@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TopNavbar } from './components/TopNavbar';
 import { BottomNav } from './components/BottomNav';
@@ -18,21 +18,29 @@ import {
   saveAppState,
   DEFAULT_PROFILE,
   DEMO_PROFILES,
+  MissionCompletionCoordinator,
+  MissionCompletionResult,
+  getAdoptedMissionId,
+  getEffectiveUserId,
 } from './utils/storage';
 import {
   HouseholdProfile,
   CEA_VER_22_FY25_26_EMISSION_FACTOR_KG_CO2_PER_KWH,
 } from './utils/sustainabilityMath';
-import { Mission, MISSIONS_LIST } from './data/missionsData';
+import { Mission } from './data/missionsData';
 import { Leaf } from 'lucide-react';
 
 export default function App() {
   const [appState, setAppState] = useState<AppState>(() => loadAppState());
+  const coordinatorRef = useRef<MissionCompletionCoordinator>(
+    new MissionCompletionCoordinator(appState)
+  );
+  const sessionTokenRef = useRef<string>('');
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
   const [isDocsOpen, setIsDocsOpen] = useState<boolean>(false);
 
-  // Check query params (?autostart=1 or ?tab=solar)
+  // Check query params (?autostart=1 or ?tab=solar) and hydrate authoritative mission ledger from backend
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get('tab');
@@ -52,65 +60,141 @@ export default function App() {
     ) {
       setActiveTab(tabParam);
     }
+
+    // Fetch authoritative mission ledger & persistence status from server
+    // Browser localStorage is treated strictly as a client-side cache, never as the authoritative reward ledger.
+    fetch('/api/missions/state', {
+      method: 'GET',
+      credentials: 'same-origin',
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data || !data.state) return;
+        if (typeof data.sessionToken === 'string' && data.sessionToken) {
+          sessionTokenRef.current = data.sessionToken;
+        }
+        setAppState((prev) => {
+          const reconciled: AppState = {
+            ...prev,
+            userId: data.userId || prev.userId,
+            completedMissions: data.state.completedMissions || prev.completedMissions,
+            streakDays:
+              typeof data.state.streakDays === 'number' ? data.state.streakDays : prev.streakDays,
+            lastActiveDate: data.state.lastActiveDate || prev.lastActiveDate,
+            persistenceMode: data.persistenceMode,
+            durableStorageAvailable: data.durableStorageAvailable,
+            persistenceWarning: data.persistenceWarning,
+          };
+          coordinatorRef.current.setState(reconciled);
+          saveAppState(reconciled);
+          return reconciled;
+        });
+      })
+      .catch(() => {
+        // Offline client cache remains available if network request fails
+      });
   }, []);
 
-  // Save changes to localStorage
+  // Save changes to localStorage cache and keep coordinator synced
   useEffect(() => {
+    coordinatorRef.current.setState(appState);
     saveAppState(appState);
   }, [appState]);
 
   // Handle saving new or edited profile
   const handleSaveProfile = (newProfile: HouseholdProfile) => {
-    setAppState((prev) => ({
-      ...prev,
-      profile: newProfile,
-      isOnboarded: true,
-    }));
+    setAppState((prev) => {
+      const updated: AppState = {
+        ...prev,
+        profile: newProfile,
+        isOnboarded: true,
+      };
+      coordinatorRef.current.setState(updated);
+      return updated;
+    });
   };
 
   // Switch demo profiles
   const handleSelectDemoProfile = (key: string) => {
     const selected = DEMO_PROFILES[key];
     if (selected) {
-      setAppState((prev) => ({
-        ...prev,
-        profile: selected,
-        isOnboarded: true,
-      }));
+      setAppState((prev) => {
+        const updated: AppState = {
+          ...prev,
+          profile: selected,
+          isOnboarded: true,
+        };
+        coordinatorRef.current.setState(updated);
+        return updated;
+      });
     }
   };
 
-  // Toggle mission completion
-  const handleToggleMission = (mission: Mission) => {
-    setAppState((prev) => {
-      const nextCompleted = { ...prev.completedMissions };
-      let streak = prev.streakDays;
+  // Complete mission once per calendar day (Asia/Kolkata) with atomic server-side duplicate prevention
+  const handleToggleMission = (mission: Mission): MissionCompletionResult => {
+    const result = coordinatorRef.current.completeSync(mission);
+    if (result.status === 'completed') {
+      setAppState(result.state);
+      saveAppState(result.state);
 
-      if (nextCompleted[mission.id]) {
-        delete nextCompleted[mission.id];
-      } else {
-        nextCompleted[mission.id] = {
-          missionId: mission.id,
-          completedAt: new Date().toISOString(),
-          points: mission.points,
-          co2SavedKg: mission.co2SavedKg,
-          inrSaved: mission.inrSaved,
-        };
-        streak = Math.max(streak, streak + 1);
+      // Commit to authoritative server-side database ledger (Supabase PostgreSQL / atomic transaction)
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sessionTokenRef.current) {
+        headers['X-UrjaSaathi-Session'] = sessionTokenRef.current;
       }
 
-      return {
-        ...prev,
-        completedMissions: nextCompleted,
-        streakDays: streak,
-        lastActiveDate: new Date().toISOString().split('T')[0],
-      };
-    });
+      fetch('/api/missions/complete', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers,
+        body: JSON.stringify({
+          mission: {
+            id: mission.id,
+            title: mission.title,
+            points: mission.points,
+            co2SavedKg: mission.co2SavedKg,
+            inrSaved: mission.inrSaved,
+          },
+        }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((serverResult) => {
+          if (!serverResult || !serverResult.state) return;
+          if (typeof serverResult.sessionToken === 'string' && serverResult.sessionToken) {
+            sessionTokenRef.current = serverResult.sessionToken;
+          }
+          // Reconcile client cache with authoritative server ledger
+          setAppState((prev) => {
+            const authoritative: AppState = {
+              ...prev,
+              userId: serverResult.userId || prev.userId,
+              completedMissions: serverResult.state.completedMissions,
+              streakDays: serverResult.state.streakDays,
+              lastActiveDate: serverResult.state.lastActiveDate,
+              persistenceMode: serverResult.persistenceMode ?? prev.persistenceMode,
+              durableStorageAvailable:
+                serverResult.durableStorageAvailable ?? prev.durableStorageAvailable,
+              persistenceWarning: serverResult.persistenceWarning ?? prev.persistenceWarning,
+            };
+            coordinatorRef.current.setState(authoritative);
+            saveAppState(authoritative);
+            return authoritative;
+          });
+        })
+        .catch(() => {
+          // Client cache retains optimistic completion if network is unreachable
+        });
+    }
+    return result;
   };
 
-  // Adopt mission from AI Coach
-  const handleAdoptMission = (title: string, kwh: number, inr: number) => {
-    const id = `adopted-${Date.now()}`;
+  // Adopt mission from AI Coach (uses deterministic missionId per recommendation title)
+  const handleAdoptMission = (
+    title: string,
+    kwh: number,
+    inr: number
+  ): MissionCompletionResult => {
+    const id = getAdoptedMissionId(title);
     const dynamicMission: Mission = {
       id,
       title,
@@ -118,14 +202,16 @@ export default function App() {
       points: 30,
       co2SavedKg: Number((kwh * CEA_VER_22_FY25_26_EMISSION_FACTOR_KG_CO2_PER_KWH).toFixed(1)),
       inrSaved: inr,
-      description: `Action recommended by UrjaGuru AI Coach for your household in ${appState.profile.district}.`,
+      description: `Action recommended by UrjaGuru AI Coach${
+        appState.profile.district ? ` for your household in ${appState.profile.district}` : ''
+      }.`,
       actionTip: 'Consistent execution leads to permanent grid demand reduction.',
       difficulty: 'Easy',
       lifePillar: 'Save Energy',
       iconName: 'Zap',
     };
 
-    handleToggleMission(dynamicMission);
+    return handleToggleMission(dynamicMission);
   };
 
   return (
@@ -150,6 +236,24 @@ export default function App() {
           onOpenOnboarding={() => setIsOnboardingOpen(true)}
           onOpenDocs={() => setIsDocsOpen(true)}
         />
+
+        {/* Explicit Persistence Limitation Notice when Supabase PostgreSQL is unconfigured */}
+        {appState.durableStorageAvailable === false && (
+          <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+            <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-2.5 text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <span className="font-bold">Local Demo Persistence Notice: </span>
+                <span>
+                  Server-side Supabase PostgreSQL credentials (<code className="font-mono">SUPABASE_URL</code>) are not configured.
+                  Durable cloud database persistence is unavailable; rewards are operating in local demo fallback mode with browser cache.
+                </span>
+              </div>
+              <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-mono text-[11px] font-semibold">
+                Mode: local_demo_fallback
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Dynamic View Content */}
         <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pb-24 lg:pb-12">
@@ -179,6 +283,7 @@ export default function App() {
           {activeTab === 'coach' && (
             <AiCoachView
               profile={appState.profile}
+              appState={appState}
               onAdoptMission={handleAdoptMission}
             />
           )}

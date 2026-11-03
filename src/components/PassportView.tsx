@@ -16,7 +16,7 @@ import {
   Calendar,
   Lock,
 } from 'lucide-react';
-import { AppState, calculateUserAggregates } from '../utils/storage';
+import { AppState, calculateUserAggregates, hasEverCompletedMission } from '../utils/storage';
 import { MISSIONS_LIST } from '../data/missionsData';
 
 interface PassportViewProps {
@@ -25,15 +25,84 @@ interface PassportViewProps {
 
 export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
   const [copied, setCopied] = useState<boolean>(false);
+  const [credentialRecord, setCredentialRecord] = useState<{
+    credential_id: string;
+    payload_hash: string;
+    qr_verification_path: string;
+    verified_count: number;
+    status: string;
+  } | null>(null);
+  const [qrVerificationStatus, setQrVerificationStatus] = useState<{
+    checking: boolean;
+    verified?: boolean;
+    signatureValid?: boolean;
+    persistenceMode?: string;
+    message?: string;
+  }>({ checking: false });
+
   const aggregates = calculateUserAggregates(appState);
-  const { profile, streakDays, completedMissions } = appState;
+  const { profile, streakDays } = appState;
   const { baselineMetrics, effectiveGreenScore, totalMissions, totalCo2SavedKg, totalInrSaved } =
     aggregates;
 
-  const passportId = `GEDA-LIFE-GJ-2026-${(
-    (profile.name.length * 7919 + profile.monthlyKwh * 13) %
-    90000 + 10000
-  )}`;
+  const fallbackPassportId = `GEDA-LIFE-GJ-2026-${
+    ((profile.name.length * 7919 + profile.monthlyKwh * 13) % 90000) + 10000
+  }`;
+  const passportId = credentialRecord?.credential_id || fallbackPassportId;
+
+  React.useEffect(() => {
+    fetch('/api/passport/credentials/issue', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        holderName: profile.name || 'Verified Household Citizen',
+        district: profile.district || 'Gujarat',
+        greenScore: effectiveGreenScore,
+      }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.credential) {
+          setCredentialRecord(data.credential);
+        }
+      })
+      .catch(() => {});
+  }, [profile.name, profile.district, effectiveGreenScore, totalMissions]);
+
+  const handleVerifyQrCredential = async () => {
+    if (!credentialRecord?.credential_id) return;
+    setQrVerificationStatus({ checking: true });
+    try {
+      const res = await fetch(
+        `/api/passport/credentials/${encodeURIComponent(credentialRecord.credential_id)}/verify`,
+        { credentials: 'same-origin' }
+      );
+      const data = await res.json();
+      if (res.ok && data.verified) {
+        setCredentialRecord(data.credential);
+        setQrVerificationStatus({
+          checking: false,
+          verified: true,
+          signatureValid: data.signatureValid,
+          persistenceMode: data.persistenceMode,
+          message: `Verified against ${data.persistenceMode} (Hash: ${data.credential.payload_hash.slice(0, 12)}... · Checks: ${data.credential.verified_count})`,
+        });
+      } else {
+        setQrVerificationStatus({
+          checking: false,
+          verified: false,
+          message: data.error || data.reason || 'Verification failed',
+        });
+      }
+    } catch {
+      setQrVerificationStatus({
+        checking: false,
+        verified: false,
+        message: 'Could not reach verification endpoint',
+      });
+    }
+  };
 
   const BADGE_DEFINITIONS = [
     {
@@ -49,7 +118,7 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
       name: 'AC 24°C Maestro',
       description: 'Maintained air conditioner at 24°C during peak Gujarat afternoons.',
       icon: '❄️',
-      unlocked: !!completedMissions['m-ac-24'],
+      unlocked: hasEverCompletedMission(appState, 'm-ac-24'),
       category: 'Cooling',
     },
     {
@@ -57,7 +126,7 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
       name: 'Vampire Load Slayer',
       description: 'Eliminated idle standby consumption across residential electronics.',
       icon: '⚡',
-      unlocked: !!completedMissions['m-phantom-power'],
+      unlocked: hasEverCompletedMission(appState, 'm-phantom-power'),
       category: 'Efficiency',
     },
     {
@@ -65,7 +134,7 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
       name: 'Surya Gujarat Scout',
       description: 'Assessed terrace solar feasibility and completed roof survey.',
       icon: '☀️',
-      unlocked: profile.hasSolarInstalled || !!completedMissions['m-solar-survey'],
+      unlocked: profile.hasSolarInstalled || hasEverCompletedMission(appState, 'm-solar-survey'),
       category: 'Solar',
     },
     {
@@ -287,25 +356,53 @@ export const PassportView: React.FC<PassportViewProps> = ({ appState }) => {
           </div>
         </div>
 
-        {/* Passport Footer with QR Stamp */}
+        {/* Passport Footer with QR Stamp & Live Verification */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-t border-emerald-700/60 pt-5 gap-4">
           <div className="space-y-1">
             <p className="text-[10px] text-emerald-300 uppercase tracking-wider font-mono">
-              Validation Protocol
+              Validation Protocol · Persistent Credential Record
             </p>
             <p className="text-xs text-emerald-100 font-medium">
               Modeled under GEDA LiFE Hackathon Guidelines • CEA Unified National Grid Ver 22.0 Baseline
             </p>
-            <p className="text-[10px] text-emerald-400">
-              Prototype Evaluation Model • Demonstration Concept for Gujarat
-            </p>
+            {credentialRecord ? (
+              <p className="text-[10px] text-emerald-300 font-mono">
+                HMAC-SHA256 Hash: {credentialRecord.payload_hash.slice(0, 16)}... • Endpoint:{' '}
+                {credentialRecord.qr_verification_path}
+              </p>
+            ) : (
+              <p className="text-[10px] text-emerald-400">
+                Prototype Evaluation Model • Demonstration Concept for Gujarat
+              </p>
+            )}
+            {qrVerificationStatus.message && (
+              <p
+                className={`text-[11px] font-semibold mt-1 ${
+                  qrVerificationStatus.verified ? 'text-lime-300' : 'text-amber-300'
+                }`}
+              >
+                {qrVerificationStatus.verified ? '✓ ' : '⚠ '}
+                {qrVerificationStatus.message}
+              </p>
+            )}
           </div>
 
           <div className="flex items-center gap-3 bg-white/10 p-2.5 rounded-xl border border-white/20 self-start sm:self-auto shrink-0">
             <QrCode className="w-10 h-10 text-white" />
-            <div className="text-[10px] font-mono text-emerald-200">
-              <span className="block font-bold text-white">PROTOTYPE DEMO</span>
-              HACKATHON MODEL
+            <div className="text-[10px] font-mono text-emerald-200 space-y-1">
+              <span className="block font-bold text-white">QR CREDENTIAL RECORD</span>
+              {credentialRecord ? (
+                <button
+                  type="button"
+                  onClick={handleVerifyQrCredential}
+                  disabled={qrVerificationStatus.checking}
+                  className="px-2 py-0.5 rounded bg-lime-400/20 hover:bg-lime-400/30 border border-lime-300/40 text-lime-200 font-sans font-bold text-[10px] transition-colors"
+                >
+                  {qrVerificationStatus.checking ? 'Verifying...' : 'Verify QR Record'}
+                </button>
+              ) : (
+                <span>HACKATHON MODEL</span>
+              )}
             </div>
           </div>
         </div>

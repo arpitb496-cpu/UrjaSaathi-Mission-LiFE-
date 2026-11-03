@@ -23,11 +23,17 @@ import {
   Check,
 } from 'lucide-react';
 import { MISSIONS_LIST, Mission } from '../data/missionsData';
-import { AppState, calculateUserAggregates } from '../utils/storage';
+import {
+  AppState,
+  calculateUserAggregates,
+  isMissionCompletedToday,
+  getCompletedMissionsTodayCount,
+  MissionCompletionResult,
+} from '../utils/storage';
 
 interface MissionsViewProps {
   appState: AppState;
-  onToggleMission: (mission: Mission) => void;
+  onToggleMission: (mission: Mission) => MissionCompletionResult | void;
 }
 
 export const MissionsView: React.FC<MissionsViewProps> = ({ appState, onToggleMission }) => {
@@ -37,16 +43,19 @@ export const MissionsView: React.FC<MissionsViewProps> = ({ appState, onToggleMi
   const [showAllMissions, setShowAllMissions] = useState<boolean>(false);
 
   const aggregates = calculateUserAggregates(appState);
-  const completedMissions = appState.completedMissions;
-  const completedCount = Object.keys(completedMissions).length;
+  const completedTodayCount = getCompletedMissionsTodayCount(appState);
   const totalMissionsCount = MISSIONS_LIST.length;
 
   const categories = ['All', 'Cooling', 'Lighting', 'Appliances', 'Solar', 'Habits', 'Peak Management'];
 
-  // Top featured mission for today
-  const incompleteMissions = MISSIONS_LIST.filter((m) => !completedMissions[m.id]);
-  const featuredMission = incompleteMissions.length > 0 ? incompleteMissions[0] : MISSIONS_LIST[0];
-  const isFeaturedDone = !!completedMissions[featuredMission.id];
+  // Pin today's featured mission so it transitions cleanly to "Completed Today" (disabled) when clicked
+  const [featuredMissionId] = useState<string>(() => {
+    const firstIncomplete = MISSIONS_LIST.find((m) => !isMissionCompletedToday(appState, m.id));
+    return firstIncomplete ? firstIncomplete.id : MISSIONS_LIST[0].id;
+  });
+  const featuredMission =
+    MISSIONS_LIST.find((m) => m.id === featuredMissionId) || MISSIONS_LIST[0];
+  const isFeaturedDone = isMissionCompletedToday(appState, featuredMission.id);
 
   const filteredMissions = MISSIONS_LIST.filter((mission) => {
     const matchesCategory = selectedCategory === 'All' || mission.category === selectedCategory;
@@ -63,24 +72,36 @@ export const MissionsView: React.FC<MissionsViewProps> = ({ appState, onToggleMi
       : filteredMissions;
 
   const handleMissionClick = (mission: Mission) => {
-    const isCurrentlyDone = !!completedMissions[mission.id];
-    onToggleMission(mission);
-
-    if (!isCurrentlyDone) {
-      try {
-        confetti({
-          particleCount: 45,
-          spread: 60,
-          origin: { y: 0.65 },
-          colors: ['#14532D', '#059669', '#A3E635', '#34D399'],
-        });
-      } catch {
-        // ignore in headless
-      }
-
-      setToastMessage(`🎉 Completed "${mission.title}"! +${mission.points} LiFE points credited.`);
+    const isCurrentlyDone = isMissionCompletedToday(appState, mission.id);
+    if (isCurrentlyDone) {
+      setToastMessage(`"${mission.title}" is already completed today. Come back tomorrow!`);
       setTimeout(() => setToastMessage(null), 3500);
+      return;
     }
+
+    const result = onToggleMission(mission);
+
+    if (result && result.status === 'already_completed') {
+      setToastMessage(result.message);
+      setTimeout(() => setToastMessage(null), 3500);
+      return;
+    }
+
+    try {
+      confetti({
+        particleCount: 45,
+        spread: 60,
+        origin: { y: 0.65 },
+        colors: ['#14532D', '#059669', '#A3E635', '#34D399'],
+      });
+    } catch {
+      // ignore in headless
+    }
+
+    setToastMessage(
+      result?.message || `🎉 Completed "${mission.title}"! +${mission.points} LiFE points credited.`
+    );
+    setTimeout(() => setToastMessage(null), 3500);
   };
 
   const getMissionIcon = (iconName: string) => {
@@ -158,10 +179,10 @@ export const MissionsView: React.FC<MissionsViewProps> = ({ appState, onToggleMi
 
           <div className="text-center px-3">
             <div className="text-xl font-bold font-heading text-emerald-700">
-              {completedCount}/{totalMissionsCount}
+              {completedTodayCount}/{totalMissionsCount}
             </div>
             <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
-              Completed
+              Done Today
             </div>
           </div>
         </div>
@@ -187,10 +208,12 @@ export const MissionsView: React.FC<MissionsViewProps> = ({ appState, onToggleMi
 
         <button
           onClick={() => handleMissionClick(featuredMission)}
+          disabled={isFeaturedDone}
+          aria-disabled={isFeaturedDone}
           className={`px-5 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shrink-0 ${
             isFeaturedDone
-              ? 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/50'
-              : 'bg-[#A3E635] hover:bg-lime-300 text-emerald-950 shadow-xs'
+              ? 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/50 cursor-not-allowed'
+              : 'bg-[#A3E635] hover:bg-lime-300 text-emerald-950 shadow-xs cursor-pointer'
           }`}
         >
           {isFeaturedDone ? (
@@ -240,7 +263,7 @@ export const MissionsView: React.FC<MissionsViewProps> = ({ appState, onToggleMi
       {/* Missions Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {displayedMissions.map((mission) => {
-          const isDone = !!completedMissions[mission.id];
+          const isDone = isMissionCompletedToday(appState, mission.id);
           return (
             <div
               key={mission.id}
@@ -307,21 +330,23 @@ export const MissionsView: React.FC<MissionsViewProps> = ({ appState, onToggleMi
 
                 <button
                   onClick={() => handleMissionClick(mission)}
+                  disabled={isDone}
+                  aria-disabled={isDone}
                   className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs ${
                     isDone
-                      ? 'bg-[#14532D] text-white'
-                      : 'bg-[#059669] hover:bg-emerald-700 text-white'
+                      ? 'bg-[#14532D] text-white cursor-not-allowed opacity-90'
+                      : 'bg-[#059669] hover:bg-emerald-700 text-white cursor-pointer'
                   }`}
                 >
                   {isDone ? (
                     <>
                       <CheckCircle2 className="w-3.5 h-3.5 text-[#A3E635]" />
-                      <span>Completed</span>
+                      <span>Completed Today</span>
                     </>
                   ) : (
                     <>
                       <Circle className="w-3.5 h-3.5" />
-                      <span>Mark Done</span>
+                      <span>Complete Mission</span>
                     </>
                   )}
                 </button>

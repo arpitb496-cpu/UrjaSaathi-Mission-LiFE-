@@ -28,10 +28,17 @@ import {
   buildCoachWelcomeMessage,
   getCleanProfileContext,
 } from '../utils/energyMathChat';
+import {
+  AppState,
+  getAdoptedMissionId,
+  isMissionCompletedToday,
+  MissionCompletionResult,
+} from '../utils/storage';
 
 interface AiCoachViewProps {
   profile: HouseholdProfile;
-  onAdoptMission?: (title: string, kwh: number, inr: number) => void;
+  appState?: AppState;
+  onAdoptMission?: (title: string, kwh: number, inr: number) => MissionCompletionResult | void;
 }
 
 interface CoachRecommendation {
@@ -54,7 +61,11 @@ interface ActionPlanItem {
 
 type ChatMessage = ChatMessageItem;
 
-export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMission }) => {
+export const AiCoachView: React.FC<AiCoachViewProps> = ({
+  profile,
+  appState,
+  onAdoptMission,
+}) => {
   const [activeTab, setActiveTab] = useState<'chat' | 'recommendations' | 'plan'>('chat');
   const { userName: cleanName, district: cleanDistrict } = getCleanProfileContext(profile);
   const locationSuffix = cleanDistrict ? ` in ${cleanDistrict}` : '';
@@ -286,10 +297,44 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
     }
   };
 
-  const handleAdopt = (item: CoachRecommendation) => {
-    if (onAdoptMission) {
-      onAdoptMission(item.title, item.estimatedMonthlyKwhSaved, item.estimatedMonthlyInrSaved);
+  const [adoptedTodayLocal, setAdoptedTodayLocal] = useState<Record<string, boolean>>({});
+
+  const isRecommendationCompletedToday = (title: string): boolean => {
+    const missionId = getAdoptedMissionId(title);
+    if (appState && isMissionCompletedToday(appState, missionId)) {
+      return true;
     }
+    return !!adoptedTodayLocal[missionId];
+  };
+
+  const handleAdopt = (item: CoachRecommendation) => {
+    const missionId = getAdoptedMissionId(item.title);
+    if (isRecommendationCompletedToday(item.title)) {
+      setAdoptedAlert(`"${item.title}" is already completed today. Come back tomorrow!`);
+      setTimeout(() => setAdoptedAlert(null), 3500);
+      return;
+    }
+
+    if (onAdoptMission) {
+      const result = onAdoptMission(
+        item.title,
+        item.estimatedMonthlyKwhSaved,
+        item.estimatedMonthlyInrSaved
+      );
+      setAdoptedTodayLocal((prev) => ({ ...prev, [missionId]: true }));
+      if (result && result.status === 'already_completed') {
+        setAdoptedAlert(result.message);
+        setTimeout(() => setAdoptedAlert(null), 3500);
+        return;
+      }
+      setAdoptedAlert(
+        result?.message || `Action adopted: "${item.title}". +30 LiFE points credited!`
+      );
+      setTimeout(() => setAdoptedAlert(null), 3500);
+      return;
+    }
+
+    setAdoptedTodayLocal((prev) => ({ ...prev, [missionId]: true }));
     setAdoptedAlert(`Action adopted: "${item.title}". LiFE points credited!`);
     setTimeout(() => setAdoptedAlert(null), 3500);
   };
@@ -465,13 +510,24 @@ export const AiCoachView: React.FC<AiCoachViewProps> = ({ profile, onAdoptMissio
                       </div>
                     </div>
 
-                    <button
-                      onClick={() => handleAdopt(rec)}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1 transition-all shadow-2xs"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Adopt Action
-                    </button>
+                    {(() => {
+                      const isDoneToday = isRecommendationCompletedToday(rec.title);
+                      return (
+                        <button
+                          onClick={() => handleAdopt(rec)}
+                          disabled={isDoneToday}
+                          aria-disabled={isDoneToday}
+                          className={`px-3 py-1.5 rounded-lg text-white text-xs font-bold flex items-center gap-1 transition-all shadow-2xs ${
+                            isDoneToday
+                              ? 'bg-[#14532D] cursor-not-allowed opacity-90'
+                              : 'bg-emerald-600 hover:bg-emerald-700 cursor-pointer'
+                          }`}
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>{isDoneToday ? 'Completed Today' : 'Adopt Action'}</span>
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
               ))}

@@ -19,6 +19,11 @@ import {
   getCleanProfileContext,
   GUJARAT_AVG_TARIFF_INR_PER_KWH,
 } from './src/utils/energyMathChat';
+import {
+  DurablePersistenceEngine,
+  getPersistenceStatus,
+  verifyServerUserIdentity,
+} from './src/db/supabasePersistence.ts';
 
 dotenv.config();
 
@@ -102,6 +107,7 @@ async function generateGeminiContentWithFallback(params: {
 
 // Health check endpoint
 app.get('/api/health', (_req: Request, res: Response) => {
+  const persistence = getPersistenceStatus();
   res.json({
     status: 'ok',
     appName: 'URJASAATHI',
@@ -109,6 +115,11 @@ app.get('/api/health', (_req: Request, res: Response) => {
     geminiConfigured: !!apiKey,
     primaryModel: GEMINI_CANDIDATE_MODELS[0],
     candidateModels: GEMINI_CANDIDATE_MODELS,
+    persistenceMode: persistence.persistenceMode,
+    supabaseConfigured: persistence.supabaseConfigured,
+    durableStorageAvailable: persistence.durableStorageAvailable,
+    persistenceNotice: persistence.persistenceNotice,
+    persistenceWarning: persistence.persistenceWarning,
     timestamp: new Date().toISOString(),
   });
 });
@@ -672,6 +683,195 @@ app.get('/api/community/stats', (_req: Request, res: Response) => {
     isDemoData: true,
     dataNotice: 'Aggregated demonstration figures benchmarked against GEDA Mission LiFE residential surveys across Gujarat.',
   });
+});
+
+// Production Persistence Engine:
+// - Uses Supabase PostgreSQL (`public.mission_completions` with UNIQUE(user_id, mission_id, completion_date)
+//   and atomic `complete_mission_atomic` transaction) when SUPABASE_URL & SUPABASE_SERVICE_ROLE_KEY are configured.
+// - Never relies on in-memory JavaScript locks across requests or instances.
+// - Never trusts arbitrary `user_id` values supplied in request bodies; verifies identity server-side.
+// - Clearly reports when persistent production storage is unconfigured and operates in Local Demo Fallback mode.
+const persistenceEngine = new DurablePersistenceEngine();
+
+function setSessionCookie(res: Response, sessionToken: string) {
+  if (!sessionToken) return;
+  res.setHeader(
+    'Set-Cookie',
+    `urjasaathi_session=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`
+  );
+}
+
+// Server-side Session & Persistence Status Endpoint
+app.get('/api/auth/session', async (req: Request, res: Response) => {
+  try {
+    const identity = await verifyServerUserIdentity({
+      authorizationHeader: req.headers.authorization,
+      sessionHeader: req.headers['x-urjasaathi-session'] as string | undefined,
+      cookieHeader: req.headers.cookie,
+      untrustedBodyUserId: (req.query.userId as string) || (req.query.user_id as string),
+    });
+
+    if (!identity.authenticated) {
+      res.status(401).json({ error: identity.error || 'Unauthorized session token' });
+      return;
+    }
+
+    setSessionCookie(res, identity.sessionToken);
+    const status = persistenceEngine.getStatus();
+
+    res.json({
+      authenticated: true,
+      userId: identity.userId,
+      authMethod: identity.authMethod,
+      sessionToken: identity.sessionToken,
+      bodyUserIdIgnored: identity.bodyUserIdIgnored,
+      ...status,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Session verification failed' });
+  }
+});
+
+// Get authoritative user mission state from durable storage (never trusts client localStorage as authoritative)
+app.get('/api/missions/state', async (req: Request, res: Response) => {
+  try {
+    const identity = await verifyServerUserIdentity({
+      authorizationHeader: req.headers.authorization,
+      sessionHeader: req.headers['x-urjasaathi-session'] as string | undefined,
+      cookieHeader: req.headers.cookie,
+      untrustedBodyUserId: (req.query.userId as string) || (req.query.user_id as string),
+    });
+
+    if (!identity.authenticated) {
+      res.status(401).json({ error: identity.error || 'Unauthorized session token' });
+      return;
+    }
+
+    setSessionCookie(res, identity.sessionToken);
+    const state = await persistenceEngine.getUserAuthoritativeState(identity.userId, new Date());
+    const status = persistenceEngine.getStatus();
+
+    res.json({
+      userId: identity.userId,
+      authMethod: identity.authMethod,
+      sessionToken: identity.sessionToken,
+      bodyUserIdIgnored: identity.bodyUserIdIgnored,
+      state,
+      ...status,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to load authoritative mission state' });
+  }
+});
+
+// Atomic, idempotent mission completion endpoint backed by UNIQUE(user_id, mission_id, completion_date)
+app.post('/api/missions/complete', async (req: Request, res: Response) => {
+  try {
+    const { userId: rawUserId, user_id: rawSnakeUserId, mission, timestamp } = req.body || {};
+    if (!mission || !mission.id || !mission.title) {
+      res.status(400).json({ error: 'Valid mission object (id, title, points) is required' });
+      return;
+    }
+
+    // Verify user identity server-side. Arbitrary user_id values in request body are NEVER trusted.
+    const identity = await verifyServerUserIdentity({
+      authorizationHeader: req.headers.authorization,
+      sessionHeader: req.headers['x-urjasaathi-session'] as string | undefined,
+      cookieHeader: req.headers.cookie,
+      untrustedBodyUserId: rawUserId || rawSnakeUserId || req.body?.state?.userId,
+    });
+
+    if (!identity.authenticated) {
+      res.status(401).json({ error: identity.error || 'Unauthorized session token' });
+      return;
+    }
+
+    setSessionCookie(res, identity.sessionToken);
+    const evalDate = timestamp ? new Date(timestamp) : new Date();
+
+    const result = await persistenceEngine.completeMissionAtomically({
+      verifiedUserId: identity.userId,
+      mission: {
+        id: String(mission.id),
+        title: String(mission.title),
+        points: Number(mission.points) || 0,
+        co2SavedKg: Number(mission.co2SavedKg) || 0,
+        inrSaved: Number(mission.inrSaved) || 0,
+      },
+      now: evalDate,
+    });
+
+    res.json({
+      ...result,
+      authMethod: identity.authMethod,
+      sessionToken: identity.sessionToken,
+      bodyUserIdIgnored: identity.bodyUserIdIgnored,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to process mission completion' });
+  }
+});
+
+// Issue or refresh a verifiable Green Impact Passport credential record from authoritative mission ledger
+app.post('/api/passport/credentials/issue', async (req: Request, res: Response) => {
+  try {
+    const identity = await verifyServerUserIdentity({
+      authorizationHeader: req.headers.authorization,
+      sessionHeader: req.headers['x-urjasaathi-session'] as string | undefined,
+      cookieHeader: req.headers.cookie,
+      untrustedBodyUserId: req.body?.userId || req.body?.user_id,
+    });
+
+    if (!identity.authenticated) {
+      res.status(401).json({ error: identity.error || 'Unauthorized session token' });
+      return;
+    }
+
+    setSessionCookie(res, identity.sessionToken);
+    const { holderName, district, greenScore } = req.body || {};
+
+    const { record, statusReport } = await persistenceEngine.upsertCredentialRecord({
+      verifiedUserId: identity.userId,
+      holderName,
+      district,
+      greenScore: Number(greenScore) || 74,
+    });
+
+    res.json({
+      credential: record,
+      bodyUserIdIgnored: identity.bodyUserIdIgnored,
+      ...statusReport,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to issue credential record' });
+  }
+});
+
+// Public QR Verification Endpoint for Green Impact Passport credentials
+app.get('/api/passport/credentials/:credentialId/verify', async (req: Request, res: Response) => {
+  try {
+    const { credentialId } = req.params;
+    const verification = await persistenceEngine.verifyCredentialRecord(credentialId);
+    if (!verification.record) {
+      res.status(404).json({
+        verified: false,
+        signatureValid: false,
+        error: verification.reason || 'Credential record not found',
+        ...verification.statusReport,
+      });
+      return;
+    }
+
+    res.json({
+      verified: verification.verified,
+      signatureValid: verification.signatureValid,
+      credential: verification.record,
+      reason: verification.reason,
+      ...verification.statusReport,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to verify credential record' });
+  }
 });
 
 // Serve frontend with Vite in development or static files in production

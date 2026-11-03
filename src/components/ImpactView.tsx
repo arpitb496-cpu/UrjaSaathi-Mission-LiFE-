@@ -21,7 +21,7 @@ import {
   Printer,
   Info,
 } from 'lucide-react';
-import { AppState, calculateUserAggregates } from '../utils/storage';
+import { AppState, calculateUserAggregates, hasEverCompletedMission } from '../utils/storage';
 import { MISSIONS_LIST } from '../data/missionsData';
 
 interface ImpactViewProps {
@@ -41,7 +41,7 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
   const [copied, setCopied] = useState<boolean>(false);
 
   const aggregates = calculateUserAggregates(appState);
-  const { profile, streakDays, completedMissions } = appState;
+  const { profile, streakDays } = appState;
   const { baselineMetrics, effectiveGreenScore, totalMissions, totalCo2SavedKg, totalInrSaved } =
     aggregates;
 
@@ -77,7 +77,7 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
       name: 'AC 24°C Maestro',
       description: 'Maintained air conditioner at 24°C during peak Gujarat afternoons.',
       icon: '❄️',
-      unlocked: !!completedMissions['m-ac-24'],
+      unlocked: hasEverCompletedMission(appState, 'm-ac-24'),
       category: 'Cooling',
     },
     {
@@ -85,7 +85,7 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
       name: 'Vampire Load Slayer',
       description: 'Eliminated idle standby consumption across residential electronics.',
       icon: '⚡',
-      unlocked: !!completedMissions['m-phantom-power'],
+      unlocked: hasEverCompletedMission(appState, 'm-phantom-power'),
       category: 'Habits',
     },
     {
@@ -101,7 +101,7 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
       name: 'BLDC Fan Evangelist',
       description: 'Adopted BEE 5-star energy efficient ceiling fan technology.',
       icon: '🌀',
-      unlocked: !!completedMissions['m-bldc-fan'],
+      unlocked: hasEverCompletedMission(appState, 'm-bldc-fan'),
       category: 'Efficiency',
     },
     {
@@ -117,7 +117,7 @@ export const ImpactView: React.FC<ImpactViewProps> = ({
       name: 'Jal Sanrakshak',
       description: 'Adopted bucket bath habit to eliminate electric geyser overdraw.',
       icon: '💧',
-      unlocked: !!completedMissions['m-bucket-bath'],
+      unlocked: hasEverCompletedMission(appState, 'm-bucket-bath'),
       category: 'Habits',
     },
     {
